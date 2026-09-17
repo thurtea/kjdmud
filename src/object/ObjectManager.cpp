@@ -1079,7 +1079,8 @@ void ObjectManager::runObjectVarInitializers(const std::shared_ptr<LpcObject>& o
     vm_->callFunctionInProgram(obj, program, "$objvarinit", {});
 }
 
-std::shared_ptr<LpcObject> ObjectManager::cloneObject(const std::string& rawFilename) {
+std::shared_ptr<LpcObject> ObjectManager::cloneObject(const std::string& rawFilename,
+                                                       std::vector<Value> createArgs) {
     // simulate.c:545-549: refuse clone_object() when the caller's euid
     // is NULL (PACKAGE_UIDS / uidModel_.active()). Message is verbatim.
     if (uidModel_.active() && vm_) {
@@ -1106,7 +1107,8 @@ std::shared_ptr<LpcObject> ObjectManager::cloneObject(const std::string& rawFile
     if (vm_) {
         try {
             runObjectVarInitializers(obj, *program);
-            vm_->callFunction(obj, "create", {});
+            // Real clone_object/new pass trailing args into create().
+            vm_->callFunction(obj, "create", std::move(createArgs));
         } catch (const std::exception& e) {
             std::cerr << "[object] create() failed for " << filename << ": " << e.what() << "\n";
             return nullptr;

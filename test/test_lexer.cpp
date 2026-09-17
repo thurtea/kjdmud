@@ -8528,15 +8528,12 @@ static void testSocketCreateRejectsUnsupportedModesAndReturnsIncreasingHandles()
     auto ob = harness.objects.cloneObject("/socktest_modes");
     assert(ob != nullptr);
 
-    // MUD (0), STREAM_BINARY (3), DATAGRAM_BINARY (4) are real modes
-    // (socket_efuns.h's own enum) but unimplemented here. see
-    // LpcSocket.hpp's own SocketMode comment. Each must reject with
-    // SocketErr::EModeNotSupp (-12), matching real socket_create()'s own
-    // "default: return EEMODENOTSUPP;" for any mode outside its switch.
+    // MUD (0) is TCP + save_variable framing. STREAM_BINARY (3) and
+    // DATAGRAM_BINARY (4) still need a buffer type and reject.
     kjdmud::Value mud = harness.vm.callFunction(ob, "make", {kjdmud::Value(static_cast<int64_t>(0))});
     kjdmud::Value streamBinary = harness.vm.callFunction(ob, "make", {kjdmud::Value(static_cast<int64_t>(3))});
     kjdmud::Value datagramBinary = harness.vm.callFunction(ob, "make", {kjdmud::Value(static_cast<int64_t>(4))});
-    assert(std::get<int64_t>(mud.data) == kjdmud::SocketErr::EModeNotSupp);
+    assert(std::get<int64_t>(mud.data) >= 0);
     assert(std::get<int64_t>(streamBinary.data) == kjdmud::SocketErr::EModeNotSupp);
     assert(std::get<int64_t>(datagramBinary.data) == kjdmud::SocketErr::EModeNotSupp);
 
@@ -8549,6 +8546,105 @@ static void testSocketCreateRejectsUnsupportedModesAndReturnsIncreasingHandles()
     assert(std::get<int64_t>(h2.data) > std::get<int64_t>(h1.data));
 
     std::cout << "testSocketCreateRejectsUnsupportedModesAndReturnsIncreasingHandles OK\n";
+}
+
+static void testCloneObjectPassesCreateArgs() {
+    ObjectVarHarness harness;
+    harness.writeFile("/clone_create_args.c",
+        "int seen_style; string seen_addr;\n"
+        "void create(int style, string addr) {\n"
+        "    seen_style = style;\n"
+        "    seen_addr = addr;\n"
+        "}\n"
+        "int style() { return seen_style; }\n"
+        "string addr() { return seen_addr; }\n"
+        "object make() {\n"
+        "    return clone_object(\"/clone_create_args\", 22, \"127.0.0.1 9\");\n"
+        "}\n");
+    auto maker = harness.objects.cloneObject("/clone_create_args");
+    assert(maker != nullptr);
+    assert(std::get<int64_t>(harness.vm.callFunction(maker, "style", {}).data) == 0);
+
+    kjdmud::Value cloned = harness.vm.callFunction(maker, "make", {});
+    auto* ob = std::get_if<std::shared_ptr<kjdmud::LpcObject>>(&cloned.data);
+    assert(ob && *ob);
+    assert(std::get<int64_t>(harness.vm.callFunction(*ob, "style", {}).data) == 22);
+    assert(std::get<std::string>(harness.vm.callFunction(*ob, "addr", {}).data) == "127.0.0.1 9");
+    std::cout << "testCloneObjectPassesCreateArgs OK\n";
+}
+
+static void testMudSocketWriteFramesSaveVariable() {
+    ObjectVarHarness harness;
+    harness.writeFile("/mud_frame.c",
+        "int fd;\n"
+        "int make() { fd = socket_create(0, \"cb\", 0); return fd; }\n"
+        "void cb(int h, mixed m) {}\n"
+        "int write_arr() { return socket_write(fd, ({ \"hi\", 3 })); }\n"
+        "int write_obj() { return socket_write(fd, this_object()); }\n");
+    auto ob = harness.objects.cloneObject("/mud_frame");
+    assert(ob != nullptr);
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "make", {}).data) >= 0);
+    // Framing accepts arrays; unbound TCP still returns ENotConn like STREAM.
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "write_arr", {}).data)
+        == kjdmud::SocketErr::ENotConn);
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "write_obj", {}).data)
+        == kjdmud::SocketErr::ETypeNotSupp);
+    std::cout << "testMudSocketWriteFramesSaveVariable OK\n";
+}
+
+static void testMudSocketReadRestoresFramedValue() {
+    ObjectVarHarness harness;
+    harness.writeFile("/mud_roundtrip.c",
+        "int listen_fd; int accepted = -1; int client_fd;\n"
+        "mixed got; int got_set; int accept_seen;\n"
+        "void on_listen(int h) { accept_seen = 1; }\n"
+        "void on_server_read(int h, mixed msg) { got = msg; got_set = 1; }\n"
+        "void on_server_write(int h) {}\n"
+        "void on_client_read(int h, mixed msg) {}\n"
+        "void on_client_write(int h) {}\n"
+        "int start(int port) {\n"
+        "    listen_fd = socket_create(0, \"on_listen\", 0);\n"
+        "    if (socket_bind(listen_fd, port, \"127.0.0.1\") != 1) return -1;\n"
+        "    if (socket_listen(listen_fd, \"on_listen\") != 1) return -2;\n"
+        "    client_fd = socket_create(0, \"on_client_read\", 0);\n"
+        "    if (client_fd < 0) return client_fd;\n"
+        "    return socket_connect(client_fd, sprintf(\"127.0.0.1 %d\", port),\n"
+        "                         \"on_client_read\", \"on_client_write\");\n"
+        "}\n"
+        "int take_accept() {\n"
+        "    accepted = socket_accept(listen_fd, \"on_server_read\", \"on_server_write\");\n"
+        "    return accepted;\n"
+        "}\n"
+        "int send_payload() { return socket_write(client_fd, ({ \"hi\", 3 })); }\n"
+        "int ready() { return accept_seen; }\n"
+        "int received() { return got_set; }\n"
+        "mixed payload() { return got; }\n");
+    auto ob = harness.objects.cloneObject("/mud_roundtrip");
+    assert(ob != nullptr);
+    const int port = 39121;
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "start",
+        {kjdmud::Value(static_cast<int64_t>(port))}).data) == 1);
+
+    pollSocketsUntil(harness.vm, [&]() {
+        return std::get<int64_t>(harness.vm.callFunction(ob, "ready", {}).data) != 0;
+    });
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "take_accept", {}).data) >= 0);
+
+    pollSocketsUntil(harness.vm, [&]() {
+        kjdmud::Value r = harness.vm.callFunction(ob, "send_payload", {});
+        int64_t code = std::get<int64_t>(r.data);
+        return code == 1 || code == kjdmud::SocketErr::ECallback;
+    });
+
+    pollSocketsUntil(harness.vm, [&]() {
+        return std::get<int64_t>(harness.vm.callFunction(ob, "received", {}).data) != 0;
+    });
+    kjdmud::Value got = harness.vm.callFunction(ob, "payload", {});
+    auto* arr = std::get_if<std::shared_ptr<kjdmud::Array>>(&got.data);
+    assert(arr && *arr && (*arr)->items.size() == 2);
+    assert(std::get<std::string>((*arr)->items[0].data) == "hi");
+    assert(std::get<int64_t>((*arr)->items[1].data) == 3);
+    std::cout << "testMudSocketReadRestoresFramedValue OK\n";
 }
 
 static void testSocketWriteOnUnknownHandleReturnsFdRangeAndErrorTextMatchesReal() {
@@ -31876,6 +31972,9 @@ int main() {
     testQueryIpNumberReturnsZeroWithNoCurrentConnection();
     testSocketStatusReturnsRealShapeArrayForKnownFdAndIncludesItInTheAllForm();
     testSocketCreateRejectsUnsupportedModesAndReturnsIncreasingHandles();
+    testCloneObjectPassesCreateArgs();
+    testMudSocketWriteFramesSaveVariable();
+    testMudSocketReadRestoresFramedValue();
     testSocketWriteOnUnknownHandleReturnsFdRangeAndErrorTextMatchesReal();
     testSocketStreamCreateBindListenAcceptConnectWriteReadCloseRoundTrip();
     testSocketDatagramWriteAndReadCallbackCarriesSenderAddress();

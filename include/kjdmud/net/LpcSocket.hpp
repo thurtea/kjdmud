@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include "kjdmud/vm/Value.hpp"
@@ -47,29 +48,17 @@ constexpr int ECallback     = -29;
 constexpr int ESockRlsd     = -30;
 constexpr int ESockNotRlsd  = -31;
 // Real socket_write()'s own MUD-mode wire-framing error (too many
-// nested levels in the LPC value being sent). Unreachable here since
-// MUD mode itself is not implemented (SocketMode's own comment above),
-// kept only so socket_error()/errorString() below never falls off the
-// real table's own bounds for a code this driver simply never returns.
+// nested levels in the LPC value being sent).
 constexpr int EBadData      = -32;
 }  // namespace SocketErr
 
 // Real enum socket_mode (socket_efuns.h): MUD=0, STREAM=1, DATAGRAM=2,
-// STREAM_BINARY=3, DATAGRAM_BINARY=4 (order and values confirmed against
-// lib/secure/include/network.h's own #define MUD 0 / STREAM 1 / DATAGRAM
-// 2, the real LPC-visible constants this mudlib's own daemon/network.c
-// and secure/std/client.c actually pass). Only Stream and Datagram are
-// implemented here. MUD mode needs real socket_write()'s own arbitrary-
-// LPC-value wire framing (a 4-byte length header around save_svalue()/
-// restore_svalue() output), which this driver has no equivalent for
-// while save_object()/restore_object() (ROADMAP row 0.7) still writes
-// its own custom format rather than the real one; the two BINARY variants
-// need a buffer type this driver's own Value has never had (the same
-// pre-existing gap already noted on to_int()'s own T_BUFFER case).
-// socket_create() rejects all three with SocketErr::EModeNotSupp, exactly
-// matching real socket_create()'s own "default: return EEMODENOTSUPP;"
-// for a mode outside its switch.
-enum class SocketMode { Stream, Datagram };
+// STREAM_BINARY=3, DATAGRAM_BINARY=4. Stream, Datagram, and Mud are
+// implemented. Mud is TCP like Stream; socket_write/read frame LPC
+// values with a 4-byte length header around save_variable text
+// (socket_efuns.c MUD case). BINARY modes still need a buffer type
+// this Value lacks and reject with SocketErr::EModeNotSupp.
+enum class SocketMode { Stream, Datagram, Mud };
 
 // Real enum socket_state (socket_efuns.h), minus StateFlushing: real
 // FluffOS enters STATE_FLUSHING only when a socket_close() happens while
@@ -151,6 +140,16 @@ public:
     // dedicated "connect succeeded" callback does not exist).
     bool blocked = false;
     std::string pendingWrite;
+
+    // MUD mode read assembly (socket_efuns.c S_HEADER / r_buf / r_off /
+    // r_len). waitingForHeader true means next bytes fill the 4-byte
+    // length; false means fill mudReadBuf up to mudReadLen.
+    bool mudWaitingForHeader = true;
+    uint32_t mudHeaderWord = 0;
+    size_t mudHeaderGot = 0;
+    uint32_t mudReadLen = 0;
+    size_t mudReadGot = 0;
+    std::string mudReadBuf;
 
     // Real S_WACCEPT: set the instant a LISTEN socket's own
     // read_callback(fd) fires (one argument, "a connection is waiting"),

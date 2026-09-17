@@ -35,13 +35,19 @@ unless a leak is measured.
 
 Next work is driver work in `src/` (compiler, VM, object, efun, net, gc,
 scheduler, security, persist). Mudlib changes only to prove driver
-behavior or keep the minimum boot path alive.
+behavior or keep the minimum boot path alive. External mudlibs under
+`temp/` (TMI-2, RiftsMUD, Nightmare, and so on) are optional
+compatibility probes to surface driver bugs. They are not a product
+goal. Do not grow or "finish" those libraries. Prefer the next clear
+driver gap in `src/` over starting another mudlib boot chase.
 
 Landed after the kjdmud foundation baseline: `sscanf` `%i` / `%X` / `%o`.
-TMI-2 boot control under `temp/` reaches Ready with simul_efun loaded
-(preprocess/parser fixes for `'#'`, `#ifdef 0`, bare `array` assign, and
-`..` range masking). Continue FluffOS compat from the next live TMI-2
-blocker during login/gameplay, or the next mudlib in the probe matrix.
+TMI-2 under `temp/` boots Ready and completes live login: create, room
+`look`, `say`, `inventory`, and exit movement (clone_object create args,
+MUD sockets, soft connect errno for denied outbound). That probe is
+enough for now. Resume FluffOS driver work from known gaps (for
+example MUD socket read framing (landed), BINARY socket modes if a real
+call site needs them, or the next row in module `instruct.md` files).
 `sprintf` multi-column `%=` stays scoped out until a real call site
 needs it.
 

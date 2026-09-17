@@ -85,7 +85,10 @@ public:
     std::shared_ptr<LpcObject> simulEfunObject() const { return simulEfunObject_; }
 
     std::shared_ptr<LpcObject> loadObject(const std::string& filename);
-    std::shared_ptr<LpcObject> cloneObject(const std::string& filename);
+    // Extra args after the filename are passed to create(), matching
+    // real FluffOS clone_object/new varargs (func_spec.c `_new`).
+    std::shared_ptr<LpcObject> cloneObject(const std::string& filename,
+                                            std::vector<Value> createArgs = {});
 
     // Look-only, no compile-on-miss: real func_spec.c's own
     // "find_object(string, int default: 0)". Unlike VM::findObject()

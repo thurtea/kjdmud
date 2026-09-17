@@ -118,7 +118,8 @@ public:
     // mudlib needs that distinction).
     bool functionExists(const std::shared_ptr<LpcObject>& obj, const std::string& functionName) const;
 
-    std::shared_ptr<LpcObject> cloneObject(const std::string& filename);
+    std::shared_ptr<LpcObject> cloneObject(const std::string& filename,
+                                            std::vector<Value> createArgs = {});
 
     // real destruct(): removes obj from the object table (thin wrapper
     // over ObjectManager::destructObject(), which already exists for

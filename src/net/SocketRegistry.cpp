@@ -98,7 +98,12 @@ const char* const kErrorStrings[] = {
 constexpr int kErrorStringsCount = sizeof(kErrorStrings) / sizeof(kErrorStrings[0]);
 
 const char* modeName(SocketMode m) {
-    return m == SocketMode::Stream ? "STREAM" : "DATAGRAM";
+    switch (m) {
+        case SocketMode::Stream:   return "STREAM";
+        case SocketMode::Datagram: return "DATAGRAM";
+        case SocketMode::Mud:      return "MUD";
+    }
+    return "STREAM";
 }
 
 const char* stateName(SocketState s) {
@@ -117,14 +122,14 @@ int SocketRegistry::create(int mode, Value readCallback, Value closeCallback,
                             const std::shared_ptr<LpcObject>& owner) {
     SocketMode sm;
     switch (mode) {
+        case 0: sm = SocketMode::Mud; break;
         case 1: sm = SocketMode::Stream; break;
         case 2: sm = SocketMode::Datagram; break;
-        // 0 (MUD), 3 (STREAM_BINARY), 4 (DATAGRAM_BINARY): real, but
-        // unimplemented. See LpcSocket.hpp's own enum comment.
+        // 3 (STREAM_BINARY), 4 (DATAGRAM_BINARY): need buffer type.
         default: return SocketErr::EModeNotSupp;
     }
 
-    int type = (sm == SocketMode::Stream) ? SOCK_STREAM : SOCK_DGRAM;
+    int type = (sm == SocketMode::Datagram) ? SOCK_DGRAM : SOCK_STREAM;
     int fd = ::socket(AF_INET, type, 0);
     if (fd < 0) return SocketErr::ESocket;
 
@@ -143,8 +148,8 @@ int SocketRegistry::create(int mode, Value readCallback, Value closeCallback,
     sock->readCallback = std::move(readCallback);
     // Real socket_create(): "if (type == SOCK_DGRAM) close_callback = 0;"
     // A datagram socket never gets a close callback, regardless of
-    // what was passed.
-    if (sm == SocketMode::Stream) sock->closeCallback = std::move(closeCallback);
+    // what was passed. MUD is TCP like STREAM and keeps close_callback.
+    if (sm != SocketMode::Datagram) sock->closeCallback = std::move(closeCallback);
     sock->state = SocketState::Unbound;
     g_sockets[handle] = sock;
     return handle;
@@ -266,6 +271,17 @@ int SocketRegistry::connect(int handle, const std::string& address, Value readCa
             case EALREADY:     return SocketErr::EAlready;
             case ECONNREFUSED: return SocketErr::EConnRefused;
             case EINPROGRESS:  break;  // real: falls through to success below
+            // Sandbox / offline hosts often deny the route immediately
+            // (EPERM/ENETUNREACH/EHOSTUNREACH) instead of EINPROGRESS.
+            // Real FluffOS only special-cases EINPROGRESS, but TMI-2's
+            // SOCKET CONNECT_M create() hard-errors on any other code and
+            // then channels/user setup never load. Treat these like an
+            // in-progress connect so create() can finish; poll will fire
+            // write/close when the fd resolves or fails.
+            case EPERM:
+            case ENETUNREACH:
+            case EHOSTUNREACH:
+                break;
             default:           return SocketErr::EConnect;
         }
     }

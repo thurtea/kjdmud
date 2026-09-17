@@ -1,5 +1,25 @@
 # STATUS
 
+**2026-09-17: MUD socket read framing.** `Server::pollSockets` assembles
+the 4-byte length header and save_variable body, then
+`parseRestoreVariableTopLevel` for the read callback. Save/restore
+helpers moved to `vm/SaveVariable` so net can use them. Round-trip
+regression green.
+
+**2026-09-17: Driver-first scope.** Product work stays in the driver
+(`src/`). External mudlibs are probe-only; do not chase RiftsMUD /
+Nightmare / library completion as the next goal. Prefer the next clear
+driver gap over another mudlib boot matrix.
+
+**2026-09-17: TMI-2 live look/move.** `clone_object`/`new` now pass
+trailing args to `create()` (SOCKET styles were ignored before). MUD
+socket mode (0) creates TCP and frames `socket_write` with
+`htonl(len)+save_variable`. Non-blocking connect treats
+EPERM/ENETUNREACH/EHOSTUNREACH like EINPROGRESS so I3 create can finish
+when outbound routes are denied. Live on 4210: create, ENTER, quad
+room `look`, `say`, `inventory`, `north` to MudOS room. Suite green
+for new clone/MUD regressions.
+
 **2026-09-17: TMI-2 live login.** Port 4210 adapter. New-character
 flow completes (name letters-only, confirm, password, gender, race,
 email, real name). Wizard grant, `say`, and `inventory` work. `look`

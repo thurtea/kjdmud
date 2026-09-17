@@ -836,8 +836,9 @@ Value VM::applyMaster(const std::string& applyName, std::vector<Value> args) {
     return callFunction(master, applyName, std::move(args));
 }
 
-std::shared_ptr<LpcObject> VM::cloneObject(const std::string& filename) {
-    return objects_.cloneObject(filename);
+std::shared_ptr<LpcObject> VM::cloneObject(const std::string& filename,
+                                            std::vector<Value> createArgs) {
+    return objects_.cloneObject(filename, std::move(createArgs));
 }
 
 void VM::destructObject(const std::shared_ptr<LpcObject>& obj,

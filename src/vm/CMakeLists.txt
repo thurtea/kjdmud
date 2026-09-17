@@ -3,6 +3,7 @@ pkg_check_modules(PCRE2 REQUIRED libpcre2-8)
 
 add_library(vm
     VM.cpp
+    SaveVariable.cpp
     Value.cpp
 )
 target_include_directories(vm PUBLIC ${CMAKE_SOURCE_DIR}/include)

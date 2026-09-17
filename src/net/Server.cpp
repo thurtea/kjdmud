@@ -1,6 +1,7 @@
 #include "kjdmud/net/Server.hpp"
 #include "kjdmud/config/Config.hpp"
 #include "kjdmud/vm/VM.hpp"
+#include "kjdmud/vm/SaveVariable.hpp"
 #include "kjdmud/object/ObjectManager.hpp"
 #include "kjdmud/object/LpcObject.hpp"
 #include "kjdmud/net/OutputContext.hpp"
@@ -25,6 +26,10 @@
 namespace kjdmud {
 
 namespace {
+// Real MAX_BYTE_TRANSFER floor for MUD frame bodies (config.h). Cap
+// oversized headers the same way socket_read_select_handler does.
+constexpr uint32_t kMudMaxByteTransfer = 1000000;
+
 bool setNonBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return false;
@@ -389,15 +394,61 @@ void Server::pollSockets(VM& vm) {
 
         if (pfd.revents & POLLIN) {
             char buf[4096];
-            ssize_t n = ::read(sock->fd, buf, sizeof(buf) - 1);
+            ssize_t n = ::read(sock->fd, buf, sizeof(buf));
             if (n > 0) {
-                buf[n] = '\0';
-                // Real: push_number(fd); push string; call_callback(fd,
-                // S_READ_FP, 2). Two args for STREAM (MUD mode's own
-                // three-arg svalue form is not implemented, see
-                // LpcSocket.hpp's own SocketMode comment).
-                fireSocketCallback(vm, sock->readCallback, sock->owner,
-                    {Value(static_cast<int64_t>(sock->handle)), Value(std::string(buf))});
+                if (sock->mode == SocketMode::Mud) {
+                    // socket_efuns.c MUD DATA_XFER: 4-byte length, then
+                    // save_svalue body; callback(fd, restored_value).
+                    size_t off = 0;
+                    const size_t total = static_cast<size_t>(n);
+                    bool closed = false;
+                    while (off < total && !closed) {
+                        if (sock->mudWaitingForHeader) {
+                            while (off < total && sock->mudHeaderGot < 4) {
+                                reinterpret_cast<unsigned char*>(&sock->mudHeaderWord)[sock->mudHeaderGot++] =
+                                    static_cast<unsigned char>(buf[off++]);
+                            }
+                            if (sock->mudHeaderGot < 4) break;
+                            sock->mudReadLen = ntohl(sock->mudHeaderWord);
+                            sock->mudHeaderGot = 0;
+                            sock->mudWaitingForHeader = false;
+                            sock->mudReadGot = 0;
+                            if (sock->mudReadLen == 0 || sock->mudReadLen > kMudMaxByteTransfer) {
+                                closeSocketAndFireCallback(vm, sock);
+                                closed = true;
+                                break;
+                            }
+                            sock->mudReadBuf.assign(sock->mudReadLen, '\0');
+                        }
+                        while (off < total && sock->mudReadGot < sock->mudReadLen) {
+                            sock->mudReadBuf[sock->mudReadGot++] = buf[off++];
+                        }
+                        if (sock->mudReadGot < sock->mudReadLen) break;
+
+                        std::string payload = sock->mudReadBuf;
+                        while (!payload.empty() && payload.back() == '\0') {
+                            payload.pop_back();
+                        }
+                        Value restored;
+                        try {
+                            restored = parseRestoreVariableTopLevel(payload);
+                        } catch (const std::exception&) {
+                            restored = Value{};
+                        }
+                        sock->mudWaitingForHeader = true;
+                        sock->mudReadBuf.clear();
+                        sock->mudReadGot = 0;
+                        sock->mudReadLen = 0;
+                        fireSocketCallback(vm, sock->readCallback, sock->owner,
+                            {Value(static_cast<int64_t>(sock->handle)), std::move(restored)});
+                    }
+                    if (closed) continue;
+                } else {
+                    // STREAM: push_number(fd); push string; two args.
+                    fireSocketCallback(vm, sock->readCallback, sock->owner,
+                        {Value(static_cast<int64_t>(sock->handle)),
+                         Value(std::string(buf, static_cast<size_t>(n)))});
+                }
             } else if (n == 0) {
                 // Peer EOF: close here rather than spinning on a
                 // readable-with-nothing socket. Real socket_read_select_handler()
