@@ -38,9 +38,12 @@ scheduler, security, persist). Mudlib changes only to prove driver
 behavior or keep the minimum boot path alive.
 
 Landed after the kjdmud foundation baseline: `sscanf` `%i` / `%X` / `%o`.
-Continue FluffOS `sscanf` / `sprintf` parity next (multi-column `%=` is
-still scoped out). External mudlib boot probes (TMI-2 first) wait until
-trees land under gitignored `temp/`.
+TMI-2 boot control under `temp/` reaches Ready with simul_efun loaded
+(preprocess/parser fixes for `'#'`, `#ifdef 0`, bare `array` assign, and
+`..` range masking). Continue FluffOS compat from the next live TMI-2
+blocker during login/gameplay, or the next mudlib in the probe matrix.
+`sprintf` multi-column `%=` stays scoped out until a real call site
+needs it.
 
 G1-G5 kit is already in `mudlib/` (item/npc/room inheritables, domain
 folders, wand verbs, domain graph save).

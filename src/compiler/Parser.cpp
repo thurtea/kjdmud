@@ -121,7 +121,18 @@ bool Parser::startsType() const {
     if (check(TokenType::Keyword) && isTypeKeyword(peek()) && peekAt(1).text == "::") return false;
     if (check(TokenType::Keyword) && isTypeKeyword(peek())) return true;
     if (startsClassType()) return true;
-    return check(TokenType::Ident) && peek().text == "array";
+    // Bare "array" (Ident, not Keyword) is a type only when a declaration
+    // follows ("array n;", "array *n;", "array foo()"). A variable named
+    // array used as an assignment/index target ("array = ...",
+    // "array[i] = ...") must not be treated as a type. TMI-2 index.c:
+    // `array = array[offset..<1];`.
+    if (check(TokenType::Ident) && peek().text == "array") {
+        const Token& next = peekAt(1);
+        if (next.type == TokenType::Ident) return true;
+        if (next.type == TokenType::Symbol && next.text == "*") return true;
+        return false;
+    }
+    return false;
 }
 
 Parser::TypeToken Parser::parseTypeToken(const std::string& context) {

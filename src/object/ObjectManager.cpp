@@ -172,7 +172,7 @@ std::string buildPredefinedMacroFlags(const Config& config, const std::string& c
 
 // Forward declaration: defined further down, needed by
 // rewriteAbsoluteIncludesRecursive() below for every spliced-in file.
-std::string maskHashQuote(const std::string& source);
+std::string maskForSystemCpp(const std::string& source);
 
 // Splice every #include (quoted, angle-bracket, or a bare macro name)
 // into the source before cpp runs. Real cpp has no mudlib root, so a
@@ -302,7 +302,7 @@ std::string rewriteAbsoluteIncludesRecursive(const std::string& source, const st
                         activeIncludes.insert(realPath);
                         std::string targetDir = realPath.substr(0, realPath.find_last_of('/'));
                         out << rewriteAbsoluteIncludesRecursive(
-                                   maskHashQuote(targetBuf.str()), mudlibRoot, includeDirs, targetDir,
+                                   maskForSystemCpp(targetBuf.str()), mudlibRoot, includeDirs, targetDir,
                                    activeIncludes, macroDefs, depth + 1)
                             << "\n";
                         activeIncludes.erase(realPath);
@@ -384,22 +384,175 @@ std::string rewriteEfunDefined(const std::string& source,
     return out.str();
 }
 
+// FluffOS/MudOS lex accepts "#ifdef 0" / "#ifndef 0" (and other integer
+// tokens) as constant false/true conditions. System cpp requires an
+// identifier after #ifdef/#ifndef and errors on "#ifdef 0". Rewrite to
+// "#if 0" / "#if 1" before cpp. Same pre-pass discipline as efun_defined.
+std::string rewriteNumericIfdef(const std::string& source) {
+    std::istringstream in(source);
+    std::ostringstream out;
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t hashPos = line.find_first_not_of(" \t");
+        if (hashPos != std::string::npos && line[hashPos] == '#') {
+            size_t kwStart = line.find_first_not_of(" \t", hashPos + 1);
+            if (kwStart != std::string::npos) {
+                size_t kwEnd = kwStart;
+                while (kwEnd < line.size() &&
+                       std::isalpha(static_cast<unsigned char>(line[kwEnd]))) {
+                    ++kwEnd;
+                }
+                std::string kw = line.substr(kwStart, kwEnd - kwStart);
+                bool isIfdef = (kw == "ifdef");
+                bool isIfndef = (kw == "ifndef");
+                if (isIfdef || isIfndef) {
+                    size_t argStart = line.find_first_not_of(" \t", kwEnd);
+                    if (argStart != std::string::npos &&
+                        std::isdigit(static_cast<unsigned char>(line[argStart]))) {
+                        size_t argEnd = argStart;
+                        while (argEnd < line.size() &&
+                               std::isdigit(static_cast<unsigned char>(line[argEnd]))) {
+                            ++argEnd;
+                        }
+                        // Only rewrite a bare integer (optional trailing
+                        // whitespace/comment). Identifiers like ifdef0 stay.
+                        size_t after = line.find_first_not_of(" \t", argEnd);
+                        bool bareInt = (after == std::string::npos || line[after] == '/' ||
+                                        line[after] == '\\');
+                        if (bareInt) {
+                            long value = std::stol(line.substr(argStart, argEnd - argStart));
+                            bool takeTrue = isIfdef ? (value != 0) : (value == 0);
+                            std::string prefix = line.substr(0, hashPos);
+                            std::string suffix =
+                                (after == std::string::npos) ? "" : line.substr(after);
+                            if (!suffix.empty() && suffix[0] != ' ' && suffix[0] != '\t') {
+                                suffix = " " + suffix;
+                            }
+                            line = prefix + "#if " + (takeTrue ? "1" : "0") + suffix;
+                        }
+                    }
+                }
+            }
+        }
+        out << line << "\n";
+    }
+    return out.str();
+}
+
 // Mask LDMud "#'name" closure literals so system cpp does not treat
 // them as unknown directives. Unmasked after cpp returns.
+// Do not touch the '#' inside an LPC character constant "'#'": that is
+// quote-hash-quote, and masking the hash+closing-quote leaves a broken
+// open quote (TMI-2 update_file.c: `if (array[i][0] == '#')`).
 const std::string kHashQuoteMarker = "__KJDMUD_HASHQUOTE_MARKER__";
+
+// Mask LPC ".." range operators so system cpp does not treat "0..N" as
+// a float `0.` plus junk (TMI-2 iwrap.c: `str[0..D_IN]` left D_IN
+// unexpanded). Leave "..." (varargs ellipsis) alone. Unmasked after cpp.
+const std::string kDotDotMarker = "__KJDMUD_DOTDOT__";
 
 std::string maskHashQuote(const std::string& source) {
     std::string result;
     result.reserve(source.size());
     for (size_t i = 0; i < source.size(); ++i) {
-        if (source[i] == '#' && i + 1 < source.size() && source[i + 1] == '\'') {
+        if (source[i] == '#' && i + 1 < source.size() && source[i + 1] == '\'' &&
+            !(i > 0 && source[i - 1] == '\'')) {
             result += kHashQuoteMarker;
-            ++i; // also consume the '\''. The marker stands in for both characters
+            ++i;
         } else {
             result += source[i];
         }
     }
     return result;
+}
+
+std::string maskDotDot(const std::string& source) {
+    // Only mask ".." outside strings, char literals, and comments.
+    // Path strings like "../x" must stay intact. Apostrophes inside
+    // comments (TMI-2 iwrap.c: "it's indented") must not open a fake
+    // char-literal mode that skips real `0..D_IN` ranges.
+    std::string result;
+    result.reserve(source.size());
+    enum class Mode { Code, DQuote, SQuote, LineComment, BlockComment };
+    Mode mode = Mode::Code;
+    for (size_t i = 0; i < source.size(); ++i) {
+        char c = source[i];
+        if (mode == Mode::LineComment) {
+            result += c;
+            if (c == '\n') mode = Mode::Code;
+            continue;
+        }
+        if (mode == Mode::BlockComment) {
+            result += c;
+            if (c == '*' && i + 1 < source.size() && source[i + 1] == '/') {
+                result += source[++i];
+                mode = Mode::Code;
+            }
+            continue;
+        }
+        if (mode == Mode::DQuote) {
+            result += c;
+            if (c == '\\' && i + 1 < source.size()) {
+                result += source[++i];
+            } else if (c == '"') {
+                mode = Mode::Code;
+            }
+            continue;
+        }
+        if (mode == Mode::SQuote) {
+            result += c;
+            if (c == '\\' && i + 1 < source.size()) {
+                result += source[++i];
+            } else if (c == '\'') {
+                mode = Mode::Code;
+            }
+            continue;
+        }
+        // Code
+        if (c == '/' && i + 1 < source.size() && source[i + 1] == '/') {
+            result += c;
+            result += source[++i];
+            mode = Mode::LineComment;
+            continue;
+        }
+        if (c == '/' && i + 1 < source.size() && source[i + 1] == '*') {
+            result += c;
+            result += source[++i];
+            mode = Mode::BlockComment;
+            continue;
+        }
+        if (c == '"') {
+            result += c;
+            mode = Mode::DQuote;
+            continue;
+        }
+        if (c == '\'') {
+            result += c;
+            mode = Mode::SQuote;
+            continue;
+        }
+        if (c == '.' && i + 1 < source.size() && source[i + 1] == '.') {
+            if (i + 2 < source.size() && source[i + 2] == '.') {
+                result += "...";
+                i += 2;
+            } else {
+                // Spaces keep adjacent macros as separate cpp tokens
+                // (`0..D_IN` must become `0 __KJDMUD_DOTDOT__ D_IN`, not
+                // one glued identifier that never expands).
+                result += " ";
+                result += kDotDotMarker;
+                result += " ";
+                ++i;
+            }
+            continue;
+        }
+        result += c;
+    }
+    return result;
+}
+
+std::string maskForSystemCpp(const std::string& source) {
+    return maskDotDot(maskHashQuote(source));
 }
 
 std::string unmaskHashQuote(const std::string& text) {
@@ -416,6 +569,26 @@ std::string unmaskHashQuote(const std::string& text) {
         }
     }
     return result;
+}
+
+std::string unmaskDotDot(const std::string& text) {
+    std::string result;
+    result.reserve(text.size());
+    size_t pos = 0;
+    while (pos < text.size()) {
+        if (text.compare(pos, kDotDotMarker.size(), kDotDotMarker) == 0) {
+            result += "..";
+            pos += kDotDotMarker.size();
+        } else {
+            result += text[pos];
+            ++pos;
+        }
+    }
+    return result;
+}
+
+std::string unmaskAfterSystemCpp(const std::string& text) {
+    return unmaskDotDot(unmaskHashQuote(text));
 }
 
 struct StagedSource {
@@ -462,7 +635,7 @@ StagedSource stageSourceForPreprocessing(const std::string& originalPath,
                     std::ostringstream headerBuf;
                     headerBuf << header.rdbuf();
                     prefix = rewriteAbsoluteIncludesRecursive(
-                        maskHashQuote(headerBuf.str()), mudlibRoot, includeDirs, dir, activeIncludes, macroDefs, 0);
+                        maskForSystemCpp(headerBuf.str()), mudlibRoot, includeDirs, dir, activeIncludes, macroDefs, 0);
                     splicedGlobalHeader = true;
                     break;
                 }
@@ -478,9 +651,10 @@ StagedSource stageSourceForPreprocessing(const std::string& originalPath,
 
     std::string originalSourceDir = originalPath.substr(0, originalPath.find_last_of('/'));
     std::string rewritten = prefix + "# 1 \"" + originalPath + "\"\n" +
-        rewriteAbsoluteIncludesRecursive(maskHashQuote(buf.str()), mudlibRoot, includeDirs, originalSourceDir,
+        rewriteAbsoluteIncludesRecursive(maskForSystemCpp(buf.str()), mudlibRoot, includeDirs, originalSourceDir,
                                           activeIncludes, macroDefs, 0);
     rewritten = rewriteEfunDefined(rewritten, efunExists);
+    rewritten = rewriteNumericIfdef(rewritten);
 
     char tmpPathTemplate[] = "/tmp/kjdmud_src_XXXXXX";
     int fd = mkstemp(tmpPathTemplate);
@@ -584,7 +758,7 @@ PreprocessResult runPreprocessor(const std::string& sourcePath, const std::vecto
     // Success is the exit code, not "stderr is empty": cpp writes
     // real warnings there too (e.g. "#endif LABEL" in debug.h).
     bool exitedOk = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    result.output = unmaskHashQuote(stripLineMarkers(outBuf.str()));
+    result.output = unmaskAfterSystemCpp(stripLineMarkers(outBuf.str()));
     result.ok = exitedOk;
     return result;
 }

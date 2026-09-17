@@ -1,5 +1,15 @@
 # STATUS
 
+**2026-09-17: TMI-2 boot control.** Fetched `tmi2_fluffos_v3` under
+gitignored `temp/`. First blockers fixed so simul_efun loads and the
+driver reaches Ready: (1) `maskHashQuote` no longer mangles `'#'`
+character constants; (2) `#ifdef 0` / `#ifndef 0` rewritten for system
+cpp; (3) bare Ident `array` is a type only when a declaration follows,
+so `array = array[offset..<1]` assigns; (4) `..` range ops masked with
+spaces before cpp so macros like `D_IN` still expand (string/comment
+aware). Suite green (949 checks, 0 fail). Bounded boot: Simul_efun
+loaded, Master loaded, Ready on port 4201.
+
 **2026-09-17: sscanf `%i`/`%X`/`%o`.** Integer alias, uppercase hex, and
 octal format specs match FluffOS `inter_sscanf` bases. Adjacent `%s`
 lookahead treats the new specs the same way. Three regression tests.

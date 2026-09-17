@@ -3306,6 +3306,27 @@ static void testBareArrayKeywordWithNoPrecedingTypeWorksInEveryPositionIncluding
     std::cout << "testBareArrayKeywordWithNoPrecedingTypeWorksInEveryPositionIncludingForeach OK\n";
 }
 
+static void testVariableNamedArrayCanBeAssignedWithoutBeingParsedAsType() {
+    // TMI-2 adm/simul_efun/index.c: `array = array[offset..<1];`
+    ObjectVarHarness harness;
+    harness.writeFile("/array_var_assign.c",
+        "mixed *probe() {\n"
+        "    mixed *array;\n"
+        "    array = ({ 1, 2, 3, 4 });\n"
+        "    array = array[1..<1];\n"
+        "    return array;\n"
+        "}\n");
+    auto obj = harness.objects.cloneObject("/array_var_assign");
+    assert(obj != nullptr);
+    kjdmud::Value result = harness.vm.callFunction(obj, "probe", {});
+    assert(std::holds_alternative<std::shared_ptr<kjdmud::Array>>(result.data));
+    auto arr = std::get<std::shared_ptr<kjdmud::Array>>(result.data);
+    assert(arr->items.size() == 3);
+    assert(std::get<int64_t>(arr->items[0].data) == 2);
+    assert(std::get<int64_t>(arr->items[2].data) == 4);
+    std::cout << "testVariableNamedArrayCanBeAssignedWithoutBeingParsedAsType OK\n";
+}
+
 static void testInheritedFunctionFallbackInvokedAtRuntime() {
     ObjectVarHarness harness;
 
@@ -5056,6 +5077,81 @@ static void testAbsoluteIncludePathResolvesAgainstMudlibRoot() {
     assert(std::get<int64_t>(result.data) == 42);
 
     std::cout << "testAbsoluteIncludePathResolvesAgainstMudlibRoot OK\n";
+}
+
+static void testCharHashLiteralSurvivesCppHashQuoteMasking() {
+    // TMI-2 adm/simul_efun/update_file.c: `if (array[i][0] == '#')`.
+    // maskHashQuote must not treat the '#' inside the character constant
+    // as an LDMud "#'" closure opener.
+    ObjectVarHarness harness;
+    harness.writeFile("/hash_char.c",
+        "int probe(string s) {\n"
+        "    return s[0] == '#';\n"
+        "}\n");
+    auto obj = harness.objects.cloneObject("/hash_char");
+    assert(obj != nullptr);
+    kjdmud::Value yes = harness.vm.callFunction(obj, "probe", {kjdmud::Value(std::string("#x"))});
+    kjdmud::Value no = harness.vm.callFunction(obj, "probe", {kjdmud::Value(std::string("ax"))});
+    assert(std::holds_alternative<int64_t>(yes.data));
+    assert(std::get<int64_t>(yes.data) == 1);
+    assert(std::holds_alternative<int64_t>(no.data));
+    assert(std::get<int64_t>(no.data) == 0);
+    std::cout << "testCharHashLiteralSurvivesCppHashQuoteMasking OK\n";
+}
+
+static void testNumericIfdefZeroIsRewrittenForSystemCpp() {
+    // FluffOS accepts `#ifdef 0`; system cpp rejects it. Pre-pass must
+    // rewrite to `#if 0` so the false branch is dropped.
+    ObjectVarHarness harness;
+    harness.writeFile("/ifdef_zero.c",
+        "#ifdef 0\n"
+        "int probe() { return 1; }\n"
+        "#else\n"
+        "int probe() { return 2; }\n"
+        "#endif\n");
+    auto obj = harness.objects.cloneObject("/ifdef_zero");
+    assert(obj != nullptr);
+    kjdmud::Value result = harness.vm.callFunction(obj, "probe", {});
+    assert(std::holds_alternative<int64_t>(result.data));
+    assert(std::get<int64_t>(result.data) == 2);
+    std::cout << "testNumericIfdefZeroIsRewrittenForSystemCpp OK\n";
+}
+
+static void testNumericIfndefZeroKeepsTheTrueBranch() {
+    ObjectVarHarness harness;
+    harness.writeFile("/ifndef_zero.c",
+        "#ifndef 0\n"
+        "int probe() { return 3; }\n"
+        "#else\n"
+        "int probe() { return 4; }\n"
+        "#endif\n");
+    auto obj = harness.objects.cloneObject("/ifndef_zero");
+    assert(obj != nullptr);
+    kjdmud::Value result = harness.vm.callFunction(obj, "probe", {});
+    assert(std::holds_alternative<int64_t>(result.data));
+    assert(std::get<int64_t>(result.data) == 3);
+    std::cout << "testNumericIfndefZeroKeepsTheTrueBranch OK\n";
+}
+
+static void testRangeDotsDoNotBlockCppMacroExpansion() {
+    // TMI-2 iwrap.c: `str[0..D_IN]` with `#define D_IN 4`. System cpp
+    // leaves `0..D_IN` unexpanded; spaced .. masking must let D_IN expand.
+    // Also include an apostrophe in a comment (real iwrap.c shape) so
+    // comment scanning cannot leave the masker stuck in char-literal mode.
+    ObjectVarHarness harness;
+    harness.writeFile("/range_macro.c",
+        "// it's a comment with an apostrophe\n"
+        "#define D_IN 4\n"
+        "string probe(string str) {\n"
+        "    return str[0..D_IN];\n"
+        "}\n");
+    auto obj = harness.objects.cloneObject("/range_macro");
+    assert(obj != nullptr);
+    kjdmud::Value result = harness.vm.callFunction(
+        obj, "probe", {kjdmud::Value(std::string("abcdefgh"))});
+    assert(std::holds_alternative<std::string>(result.data));
+    assert(std::get<std::string>(result.data) == "abcde");
+    std::cout << "testRangeDotsDoNotBlockCppMacroExpansion OK\n";
 }
 
 // Found live against a real third-party mudlib corpus (row 3.8's TMI-2
@@ -31567,6 +31663,7 @@ int main() {
     testInheritStatementParsesAdjacentStringLiteralsWithNoOperator();
     testArrayReservedWordKeywordFormWorksInEveryPositionTheStarSuffixAlreadyDid();
     testBareArrayKeywordWithNoPrecedingTypeWorksInEveryPositionIncludingForeach();
+    testVariableNamedArrayCanBeAssignedWithoutBeingParsedAsType();
     testInheritedFunctionFallbackInvokedAtRuntime();
     testInheritedObjectVariableSlotsShareStorageWithParent();
     testInheritCycleDetectedAsCompileFailure();
@@ -31633,6 +31730,10 @@ int main() {
     testCheckValidPathLdmudRejectsSpaceButAllowsHash();
     testCreateRuntimeErrorFailsLoadInsteadOfCrashing();
     testAbsoluteIncludePathResolvesAgainstMudlibRoot();
+    testCharHashLiteralSurvivesCppHashQuoteMasking();
+    testNumericIfdefZeroIsRewrittenForSystemCpp();
+    testNumericIfndefZeroKeepsTheTrueBranch();
+    testRangeDotsDoNotBlockCppMacroExpansion();
     testNestedAbsoluteIncludeInsideAnIncludedFileAlsoResolves();
     testMacroComputedAbsoluteIncludeResolvesAgainstMudlibRoot();
     testEfunDefinedInIfDirectiveResolvesAgainstTheInjectedEfunChecker();
