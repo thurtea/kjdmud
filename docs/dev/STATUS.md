@@ -1,5 +1,14 @@
 # STATUS
 
+**2026-09-17: TMI-2 live login.** Port 4210 adapter. New-character
+flow completes (name letters-only, confirm, password, gender, race,
+email, real name). Wizard grant, `say`, and `inventory` work. `look`
+fails (no room): `I3` create dies on socket send `Descriptor out of
+range`, `channels` create fails, `user::setup` aborts before
+`complete_setup`. Groups "User ... not found" is mudlib noise. Next:
+fix I3/channels so setup places the player. Handoff:
+`notes/tomorrow.md`.
+
 **2026-09-17: TMI-2 boot control.** Fetched `tmi2_fluffos_v3` under
 gitignored `temp/`. First blockers fixed so simul_efun loads and the
 driver reaches Ready: (1) `maskHashQuote` no longer mangles `'#'`
