@@ -1,0 +1,41 @@
+# Continuous integration: build the driver and run the full test suite on
+# every push to main and every pull request. This runs the exact same
+# three commands README.md documents and every development session runs
+# by hand (cmake configure, cmake build, ctest), nothing more. If this
+# file and README.md ever disagree about those commands, trust README.md
+# and fix this file to match it, same rule the Makefile already carries.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build and test (Ubuntu, GCC)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # INSTALL.md's own Debian/Ubuntu package line, plus libssl-dev for
+      # the libcrypto pkg-config module src/efun/CMakeLists.txt requires.
+      # cmake and g++ are already present on the ubuntu-24.04 image
+      # (g++ 13, cmake 3.28), both new enough for this project's C++20 and
+      # CMake 3.20 minimums.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ cmake pkg-config libpcre2-dev libcrypt-dev libsqlite3-dev libssl-dev
+
+      - name: Configure
+        run: cmake -B build -S .
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run the test suite
+        run: ctest --test-dir build --output-on-failure

@@ -1,0 +1,4 @@
+This directory exists for master.c's own log_error() (LOG_DIR + "/compile")
+to write compile-error logs into. write_file() does not create missing
+directories, so this has to exist on disk even though nothing else here
+carries content by default.

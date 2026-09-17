@@ -1,0 +1,27 @@
+Domain layout for the Library world kit.
+
+Each domain is a folder under /domains/<name>/ with three subfolders:
+
+  items/   portable objects from the wand `create` verb
+  rooms/   rooms from the wand `room` verb
+  npcs/    living NPCs from the wand `npc` verb
+
+Set the active domain with the wand: `domain <name>`. `create`,
+`room`, `npc`, `edit`, and `exit` then write under that domain.
+`domain` with no argument reports the current domain. `domain none`
+clears it.
+
+With no domain set, those verbs still write the legacy path
+/data/created/<name>.c.
+
+Inheritables used by generated files are named in worldkit.h
+(ITEM_INH, ROOM_INH, NPC_INH).
+
+Each domain may also have graph.o, a save_object snapshot of room
+exits, scenery, and non-portable placed objects. Wand `save` writes
+it; `exit` writes it too when a domain is set. Master create() loads
+/single/domain_d, which restores every domain that has a graph.o.
+
+domains/example/ is an empty stub so the tree is present at boot.
+It holds no content. domains/rifts/ is the first G6 Chi-Town
+'Burbs slice. See domains/rifts/README.

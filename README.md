@@ -40,4 +40,3 @@ ctest --test-dir build --output-on-failure
 - `CURSOR.md`: standing rules for agents working in this repository.
 
 No license file yet.
-# kjdmud

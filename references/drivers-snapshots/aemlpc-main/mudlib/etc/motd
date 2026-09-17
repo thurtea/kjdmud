@@ -1,0 +1,35 @@
+This is an LPC driver test/demo environment.
+
+Commands you can actually run here:
+  look [id]      look at the room, or at something here
+  examine [id]   same as look
+  take <id>      pick up something in the room
+  get <id>       same as take
+  drop <id>      put down something you are carrying
+  say <text>     speak to everyone in your room
+  who            list connected players
+  eval <code>    compile and run one LPC statement, e.g.
+                 eval return 1 + 1;
+  help           show this list again
+  quit           save and disconnect
+  shutdown       stop the whole driver process
+
+Movement (each room's own description lists its real exits):
+  north / south / east / west
+
+Talking to people:
+  talk <name>               start a conversation
+  talk <name> about <topic> ask about something specific
+
+Once you are holding the wand of creation (left on the gatehouse
+worktable, and handed to you automatically when you arrive):
+  clone <path>   clone a copy of an existing object into this
+                 room or your pack
+  purge <name>   clear away an unwanted object in the room
+  create <name>  build something new
+  npc <name>     create a living NPC in this room
+  edit <id> <text> rewrite a created object's description
+  room <name>    write a new room (domain or /data/created/)
+  exit <dir> <path> link this room to another
+  domain [name]  set or show the active domain (none clears)
+  save           write the active domain world graph
