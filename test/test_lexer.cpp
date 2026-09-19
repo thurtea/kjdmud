@@ -8450,6 +8450,36 @@ static void testQueryIpNumberReturnsZeroWithNoCurrentConnection() {
     std::cout << "testQueryIpNumberReturnsZeroWithNoCurrentConnection OK\n";
 }
 
+static void testQueryIpNumberAndQueryIpNameHonorObjectArgumentWithoutOutputContext() {
+    ObjectVarHarness harness;
+    harness.writeFile("/ip_obj_probe.c",
+        "string probe_num(object ob) { return query_ip_number(ob); }\n"
+        "string probe_name(object ob) { return query_ip_name(ob); }\n");
+    harness.writeFile("/ip_obj_plain.c", "void create() {}\n");
+    auto probe = harness.objects.cloneObject("/ip_obj_probe");
+    auto interactive = harness.objects.cloneObject("/ip_obj_plain");
+    auto plain = harness.objects.cloneObject("/ip_obj_plain");
+    assert(probe != nullptr && interactive != nullptr && plain != nullptr);
+
+    int serverFd, clientFd;
+    makeLoopbackTcpPair(serverFd, clientFd);
+    kjdmud::Connection conn(serverFd);
+    conn.attach(interactive);
+
+    // Object form must work even when no connection is driving the call.
+    kjdmud::OutputContext::set(nullptr);
+    kjdmud::Value num = harness.vm.callFunction(probe, "probe_num", {kjdmud::Value(interactive)});
+    kjdmud::Value name = harness.vm.callFunction(probe, "probe_name", {kjdmud::Value(interactive)});
+    kjdmud::Value missing = harness.vm.callFunction(probe, "probe_num", {kjdmud::Value(plain)});
+
+    assert(std::get<std::string>(num.data) == "127.0.0.1");
+    assert(std::get<std::string>(name.data) == "127.0.0.1");
+    assert(std::holds_alternative<std::monostate>(missing.data));
+
+    ::close(clientFd);
+    std::cout << "testQueryIpNumberAndQueryIpNameHonorObjectArgumentWithoutOutputContext OK\n";
+}
+
 static void testSocketStatusReturnsRealShapeArrayForKnownFdAndIncludesItInTheAllForm() {
     ObjectVarHarness harness;
     harness.writeFile("/sockstatus_probe.c",
@@ -31973,6 +32003,7 @@ int main() {
     testTerminalColourMultipleRealCodesInOneString();
     testQueryIpNumberAndQueryIpNameReturnLoopbackAddressForCurrentConnection();
     testQueryIpNumberReturnsZeroWithNoCurrentConnection();
+    testQueryIpNumberAndQueryIpNameHonorObjectArgumentWithoutOutputContext();
     testSocketStatusReturnsRealShapeArrayForKnownFdAndIncludesItInTheAllForm();
     testSocketCreateRejectsUnsupportedModesAndReturnsIncreasingHandles();
     testCloneObjectPassesCreateArgs();

@@ -1,5 +1,13 @@
 # STATUS
 
+**2026-09-19: query_ip_number/name honor object arg.** Both efuns resolve
+an optional interactive object through `InteractiveRegistry` (same
+pattern as `query_ip_port`) instead of only `OutputContext::current()`.
+No-arg still prefers the current connection, then command_giver.
+`query_ip_name` stays numeric-only (no blocking DNS). Website footers
+dropped affiliation disclaimers; CREDITS trimmed to a short prior-art
+list. Suite green (2/2 tests).
+
 **2026-09-19: query_ip_port uses accept port.** Multi-port `listen:` meant
 `query_ip_port` returning only `Config::port()` was wrong for websocket
 and TLS listeners. `Connection` now stores the accept port

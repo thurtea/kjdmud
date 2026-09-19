@@ -7820,16 +7820,24 @@ void registerCoreEfuns() {
 
     // string query_ip_number(void|object ob). comm.c's real
     // query_ip_number(): "inet_ntoa(ob->interactive->addr.sin_addr)",
-    // defaulting to command_giver when ob is omitted. This driver has
-    // no separate "command_giver" concept from "the connection driving
-    // the current call" (OutputContext::current(), the same stand-in
-    // used throughout this driver's other connection-scoped efuns.
-    // receive(), input_to()), so the object argument is accepted for
-    // signature compatibility but not actually used to look up a
-    // *different* connection's address; only the current one's own
-    // peer address is queried, via getpeername() on its fd.
-    t.registerEfun("query_ip_number", [](VM&, std::vector<Value>&) -> Value {
-        Connection* conn = OutputContext::current();
+    // defaulting to command_giver when ob is omitted. Resolve the
+    // optional object via InteractiveRegistry (same pattern as
+    // query_ip_port). No-arg falls back to OutputContext::current()
+    // then command_giver. Peer address via getpeername() on that
+    // connection's fd.
+    t.registerEfun("query_ip_number", [](VM& vm, std::vector<Value>& args) -> Value {
+        Connection* conn = nullptr;
+        if (!args.empty() && std::holds_alternative<std::shared_ptr<LpcObject>>(args[0].data)) {
+            auto ob = std::get<std::shared_ptr<LpcObject>>(args[0].data);
+            if (!ob) return Value{};
+            conn = InteractiveRegistry::find(ob);
+        } else {
+            conn = OutputContext::current();
+            if (!conn) {
+                auto giver = resolveCommandGiver(vm);
+                if (giver) conn = InteractiveRegistry::find(giver);
+            }
+        }
         if (!conn) return Value{};
         sockaddr_in addr{};
         socklen_t len = sizeof(addr);
@@ -7846,16 +7854,23 @@ void registerCoreEfuns() {
     // string query_ip_name(void|object ob). Real comm.c's own
     // query_ip_name() does a reverse-DNS lookup of the peer address,
     // falling back to the numeric IP when hostname resolution is
-    // unavailable/disabled (real FluffOS itself gates this behind a
-    // config option and has the same numeric fallback). This driver
-    // does no DNS resolution of its own at all (a blocking reverse
-    // lookup inline in the connection-handling loop would stall every
-    // other connection during it). Always takes that same fallback,
-    // returning the numeric IP string, matching query_ip_number()'s own
-    // "only the current connection, via OutputContext::current()"
-    // simplification.
-    t.registerEfun("query_ip_name", [](VM&, std::vector<Value>&) -> Value {
-        Connection* conn = OutputContext::current();
+    // unavailable/disabled. This driver does no DNS resolution (a
+    // blocking reverse lookup would stall every other connection).
+    // Always takes that numeric fallback. Object resolution matches
+    // query_ip_number().
+    t.registerEfun("query_ip_name", [](VM& vm, std::vector<Value>& args) -> Value {
+        Connection* conn = nullptr;
+        if (!args.empty() && std::holds_alternative<std::shared_ptr<LpcObject>>(args[0].data)) {
+            auto ob = std::get<std::shared_ptr<LpcObject>>(args[0].data);
+            if (!ob) return Value{};
+            conn = InteractiveRegistry::find(ob);
+        } else {
+            conn = OutputContext::current();
+            if (!conn) {
+                auto giver = resolveCommandGiver(vm);
+                if (giver) conn = InteractiveRegistry::find(giver);
+            }
+        }
         if (!conn) return Value{};
         sockaddr_in addr{};
         socklen_t len = sizeof(addr);
