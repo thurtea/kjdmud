@@ -240,15 +240,10 @@ public:
     // pointer distinct from "whichever object's function is running".
     // Mode 2 (per-frame function name) still has no backing data here at
     // all. See call_stack()'s own EfunTable.cpp registration comment.
-    // Mode 3 (per-frame origin) is a different story as of the origin()
-    // implementation below: originStack_ now tracks exactly this, one
-    // entry per still-active run() call in the same parallel shape as
-    // callStack_. call_stack() mode 3 itself is still not wired up
-    // (out of scope for the row that added origin(). See STATUS.md),
-    // but the data it would need now exists, a real, cheap follow-on
-    // for whoever picks that up next rather than a fresh implementation
-    // from scratch.
+    // Mode 3 (per-frame origin) reads originStack_ via originFrames(),
+    // zip-aligned from the innermost frame (see call_stack mode 3).
     const std::vector<std::shared_ptr<LpcObject>>& callFrames() const { return callStack_; }
+    const std::vector<Origin>& originFrames() const { return originStack_; }
 
     // See originStack_'s own comment. currentOrigin() defaults to
     // Origin::Driver when nothing has ever pushed (an origin() call

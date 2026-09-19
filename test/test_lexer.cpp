@@ -9552,11 +9552,31 @@ static void testCallStackMode1ReturnsObjectsCurrentFirstWalkingOutward() {
     std::cout << "testCallStackMode1ReturnsObjectsCurrentFirstWalkingOutward OK\n";
 }
 
-static void testCallStackModes2And3ThrowNotImplementedButModesOutOfRangeAlsoThrow() {
+static void testCallStackMode3ReturnsPerFrameOriginCurrentFirst() {
+    ObjectVarHarness harness;
+    harness.writeFile("/cs_origin_callee.c",
+        "mixed *probe() { return call_stack(3); }\n");
+    harness.writeFile("/cs_origin_caller.c",
+        "mixed *start(object callee) { return callee->probe(); }\n");
+    auto callee = harness.objects.cloneObject("/cs_origin_callee");
+    auto caller = harness.objects.cloneObject("/cs_origin_caller");
+    assert(callee != nullptr && caller != nullptr);
+
+    // callFunction defaults to Origin::Driver for the outer frame;
+    // callee->probe() is CallOther.
+    kjdmud::Value result = harness.vm.callFunction(caller, "start", {kjdmud::Value(callee)});
+    auto* arr = std::get_if<std::shared_ptr<kjdmud::Array>>(&result.data);
+    assert(arr != nullptr && (*arr)->items.size() >= 2);
+    assert(std::get<std::string>((*arr)->items[0].data) == "call_other");
+    assert(std::get<std::string>((*arr)->items[1].data) == "driver");
+
+    std::cout << "testCallStackMode3ReturnsPerFrameOriginCurrentFirst OK\n";
+}
+
+static void testCallStackMode2StillThrowsAndOutOfRangeThrows() {
     ObjectVarHarness harness;
     harness.writeFile("/cs_err.c",
         "mixed *probe_fn() { return call_stack(2); }\n"
-        "mixed *probe_origin() { return call_stack(3); }\n"
         "mixed *probe_bad() { return call_stack(9); }\n");
     auto ob = harness.objects.cloneObject("/cs_err");
     assert(ob != nullptr);
@@ -9566,17 +9586,12 @@ static void testCallStackModes2And3ThrowNotImplementedButModesOutOfRangeAlsoThro
     catch (const kjdmud::LpcRuntimeError&) { threwFn = true; }
     assert(threwFn);
 
-    bool threwOrigin = false;
-    try { harness.vm.callFunction(ob, "probe_origin", {}); }
-    catch (const kjdmud::LpcRuntimeError&) { threwOrigin = true; }
-    assert(threwOrigin);
-
     bool threwBad = false;
     try { harness.vm.callFunction(ob, "probe_bad", {}); }
     catch (const kjdmud::LpcRuntimeError&) { threwBad = true; }
     assert(threwBad);
 
-    std::cout << "testCallStackModes2And3ThrowNotImplementedButModesOutOfRangeAlsoThrow OK\n";
+    std::cout << "testCallStackMode2StillThrowsAndOutOfRangeThrows OK\n";
 }
 
 static void testCommandsReturnsRegisteredActionsOnTheCommandGiverItself() {
@@ -31913,7 +31928,8 @@ int main() {
     testClonepTrueForCloneFalseForBlueprintAndNonObject();
     testVirtualpTrueOnlyForACompileObjectResultAndDefaultsToThisObject();
     testCallStackMode1ReturnsObjectsCurrentFirstWalkingOutward();
-    testCallStackModes2And3ThrowNotImplementedButModesOutOfRangeAlsoThrow();
+    testCallStackMode3ReturnsPerFrameOriginCurrentFirst();
+    testCallStackMode2StillThrowsAndOutOfRangeThrows();
     testCommandsReturnsRegisteredActionsOnTheCommandGiverItself();
     testSocketAddressForInteractiveObjectReturnsPeerAddrAndPortOrZero();
     testSocketAddressForHandleDistinguishesLocalFromRemote();

@@ -4713,19 +4713,13 @@ void registerCoreEfuns() {
     // ever indexes call_stack(0)/call_stack(2) results through
     // identify(), which does not care about that distinction for a
     // plain object). Mode 2 has no backing data anywhere in this driver
-    // (no per-frame function-name tracking exists). Mode 3 is a
-    // separate story since origin() was implemented (VM::originStack_):
-    // per-frame origin data now exists, but not in a form mode 3 could
-    // safely zip against callStack_ index-for-index. originStack_ is
-    // only ever pushed alongside a real run() call, while callStack_
-    // also gets a bookkeeping-only push with no run() at all for a
-    // closure that resolves to a core efun (see callClosure()'s own
-    // ObjectFrameGuard comment), so the two can differ in length right
-    // at that point and a naive same-index pairing would silently
-    // misalign. Both modes throw a clear error naming the gap rather
-    // than guessing. get_stack()'s own real use is a wizard debug
-    // tool, not gameplay logic, so a hard failure there is an
-    // acceptable, honest outcome versus silently returning wrong data.
+    // (no per-frame function-name tracking exists) and still throws.
+    // Mode 3 reads originFrames() (originStack_), zip-aligned from the
+    // innermost call frame. callStack_ can be one longer than
+    // originStack_ when callClosure() pushes ObjectFrameGuard for a
+    // core-efun closure without an OriginGuard (real efuns have no
+    // control-stack frame); those unpaired outer-current frames report
+    // "driver".
     t.registerEfun("call_stack", [](VM& vm, std::vector<Value>& args) -> Value {
         if (args.empty() || !std::holds_alternative<int64_t>(args[0].data)) {
             throw LpcRuntimeError("call_stack: expected an int argument");
@@ -4734,21 +4728,32 @@ void registerCoreEfuns() {
         if (mode < 0 || mode > 3) {
             throw LpcRuntimeError("call_stack: first argument must be 0, 1, 2, or 3");
         }
-        if (mode == 2 || mode == 3) {
+        if (mode == 2) {
             throw LpcRuntimeError(
-                "call_stack: mode 2 (function names) and mode 3 (origin) are not "
-                "implemented. This driver's call stack tracks per-frame objects "
-                "only, no per-frame function-name or origin tagging exists");
+                "call_stack: mode 2 (function names) is not implemented. "
+                "This driver's call stack does not track per-frame function names");
         }
         const auto& frames = vm.callFrames();
+        const auto& origins = vm.originFrames();
         auto result = std::make_shared<Array>();
         result->items.reserve(frames.size());
         // frames.back() is the innermost/current frame (matches
         // currentObject()'s own read). Reverse-iterate for real
         // call_stack()'s own "current first, walking outward" order.
-        for (auto it = frames.rbegin(); it != frames.rend(); ++it) {
+        const size_t extra =
+            frames.size() > origins.size() ? frames.size() - origins.size() : 0;
+        size_t seen = 0;
+        size_t originIdx = origins.size();
+        for (auto it = frames.rbegin(); it != frames.rend(); ++it, ++seen) {
             const auto& ob = *it;
-            if (mode == 1) {
+            if (mode == 3) {
+                Origin origin = Origin::Driver;
+                if (seen >= extra && originIdx > 0) {
+                    --originIdx;
+                    origin = origins[originIdx];
+                }
+                result->items.push_back(Value(std::string(originName(origin))));
+            } else if (mode == 1) {
                 result->items.push_back(ob ? Value(ob) : Value{});
             } else {
                 result->items.push_back(Value(ob ? ob->filename() : std::string()));

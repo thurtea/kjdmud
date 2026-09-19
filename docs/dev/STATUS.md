@@ -1,5 +1,12 @@
 # STATUS
 
+**2026-09-19: call_stack mode 3 (origin).** `call_stack(3)` returns
+per-frame `origin_name` strings, current frame first. Reads
+`originFrames()` and zip-aligns from the innermost call frame so an
+extra `ObjectFrameGuard` from a core-efun closure (no OriginGuard) does
+not steal another frame's origin. Mode 2 (function names) still throws.
+Regression added. Suite green (2/2 tests).
+
 **2026-09-19: query_ip_number/name honor object arg.** Both efuns resolve
 an optional interactive object through `InteractiveRegistry` (same
 pattern as `query_ip_port`) instead of only `OutputContext::current()`.
