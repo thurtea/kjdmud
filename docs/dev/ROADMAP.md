@@ -60,13 +60,16 @@ folders, wand verbs, domain graph save).
 - [x] G6 three-room loop: `watch_post` linked from `lower_gate`,
   reachable both ways.
 
-Identity rename to `kjdmud` is closed (prior names: AMLP, crysis,
-aemlpc). Snapshots of those trees live under
-`references/drivers-snapshots/`. `save_object` writes width>1 mappings
-as `key:v0;v1` and writes nothing for object, closure, and buffer
-(restore is 0). `dump_state` now dumps those extra columns too
-(`M<count>w<width>:`; width-1 dumps stay `M<count>:`). Persist dump
-magic stays `AMLPSTATE1`.
+`save_object` writes width>1 mappings as `key:v0;v1` and writes nothing
+for object, closure, and buffer (restore is 0). `dump_state` now dumps
+those extra columns too (`M<count>w<width>:`; width-1 dumps stay
+`M<count>:`). Persist dump magic stays `AMLPSTATE1`.
+
+Public site and browser WebSocket client live under `website/` (GitHub
+Pages). Old local driver snapshot trees are not kept in this repository;
+FluffOS citation sources for development stay under gitignored `temp/`.
+`query_ip_port` returns the connection accept port under multi-port
+`listen:`.
 
 ## Status record
 

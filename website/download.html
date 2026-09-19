@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kjdmud - Download</title>
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <div class="brand">
+        <h1>kjdmud</h1>
+        <span class="tag">LPC game driver</span>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Overview</a>
+        <a href="index.html#features">Features</a>
+        <a href="download.html">Download</a>
+        <a href="documentation.html">Documentation</a>
+        <a href="client.html">Web Client</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="site-main">
+    <h2>Download</h2>
+    <p>
+      kjdmud is developed in git. Clone the repository and build with CMake.
+      There is no separate stable / development branch split yet; <code>main</code>
+      is the current tree.
+    </p>
+
+    <ul class="dl-list">
+      <li>
+        <strong>Source on GitHub</strong>
+        <a href="https://github.com/thurtea/kjdmud">https://github.com/thurtea/kjdmud</a>
+      </li>
+      <li>
+        <strong>Clone</strong>
+        <pre>git clone https://github.com/thurtea/kjdmud.git
+cd kjdmud</pre>
+      </li>
+      <li>
+        <strong>Build and test</strong>
+        <pre>cmake -B build -S .
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure</pre>
+        Full dependency lists and connect steps are in
+        <a href="https://github.com/thurtea/kjdmud/blob/main/INSTALL.md">INSTALL.md</a>.
+      </li>
+      <li>
+        <strong>Run the bundled mudlib</strong>
+        <pre>./build/kjdmud etc/driver.cfg</pre>
+        Telnet on port 1122, WebSocket on port 1124. Use the
+        <a href="client.html">Web Client</a> against <code>ws://127.0.0.1:1124</code>.
+      </li>
+    </ul>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      kjdmud is an independent LPC driver. It is not affiliated with FluffOS,
+      LDMud, or DGD.
+    </div>
+  </footer>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -100,7 +100,7 @@ Listen ports (`etc/driver.cfg`, even numbers from 1122):
 | Port | Kind | Client |
 |------|------|--------|
 | 1122 | telnet | Mudlet, tintin, `nc`, `telnet` |
-| 1124 | websocket | `mudlib/www/client.html` (`ws://`) |
+| 1124 | websocket | `website/client.html` (`ws://`) |
 | 1126 | telnet + TLS | Mudlet with SSL, after step 5 |
 | 1128 | websocket + TLS | browser `wss://`, after step 5 |
 
@@ -123,15 +123,20 @@ holding a wand of creation. `help` lists the live commands.
 
 ### Browser (1124)
 
-Leave the driver running and open `mudlib/www/client.html` in a browser.
+Leave the driver running and open `website/client.html` in a browser.
 It defaults to `ws://127.0.0.1:1124`. If `file://` is awkward, serve the
 directory with any static server, for example:
 
 ```
-python3 -m http.server 8080 --directory mudlib/www
+python3 -m http.server 8080 --directory website
 ```
 
-then open `http://127.0.0.1:8080/client.html`.
+then open `http://127.0.0.1:8080/client.html`. After GitHub Pages is
+enabled for this repository, the same client is also at
+`https://thurtea.github.io/kjdmud/client.html`.
+
+The older path `mudlib/www/client.html` only redirects to
+`website/client.html`.
 
 ### TLS (1126, 1128)
 

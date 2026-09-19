@@ -166,6 +166,7 @@ void Server::onNewConnection(int clientFd, const ListenPort& spec) {
     ::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     auto conn = std::make_shared<Connection>(clientFd);
+    conn->setLocalPort(spec.port);
     if (spec.tls) {
         if (!sslCtx_ || !conn->acceptTls(sslCtx_)) {
             std::cerr << "[net] TLS handshake failed on fd=" << clientFd << "\n";

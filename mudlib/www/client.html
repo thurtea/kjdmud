@@ -3,68 +3,21 @@
 <head>
   <meta charset="utf-8">
   <title>Library WebSocket client</title>
+  <meta http-equiv="refresh" content="0; url=../../website/client.html">
   <style>
-    body { font-family: monospace; background: #111; color: #ddd; margin: 1rem; }
-    #log { white-space: pre-wrap; height: 24rem; overflow: auto; border: 1px solid #444; padding: 0.5rem; }
-    #url, #line { width: 70%; }
-    label, p, li { line-height: 1.4; }
+    body { font-family: monospace; background: #111; color: #ddd; margin: 1.5rem; }
+    a { color: #9cf; }
   </style>
 </head>
 <body>
-  <h1>Library</h1>
-  <p>Browser path onto the bundled mudlib. The driver does not serve this
-     file. Open it from disk, or serve the <code>mudlib/www/</code> folder
-     with any static server.</p>
-  <ul>
-    <li>1122 telnet (use Mudlet, not this page)</li>
-    <li>1124 websocket (this page, default)</li>
-    <li>1126 telnet TLS</li>
-    <li>1128 websocket TLS (<code>wss://127.0.0.1:1128</code> after certs)</li>
-  </ul>
-  <form id="connect">
-    <label>URL <input id="url" value="ws://127.0.0.1:1124"></label>
-    <button type="submit">connect</button>
-  </form>
-  <div id="log"></div>
-  <form id="send">
-    <input id="line" autocomplete="off" placeholder="type a command">
-    <button type="submit">send</button>
-  </form>
-  <script>
-    const log = document.getElementById("log");
-    const urlBox = document.getElementById("url");
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("url")) urlBox.value = params.get("url");
-    let ws = null;
-    function add(text) {
-      log.textContent += text;
-      log.scrollTop = log.scrollHeight;
-    }
-    function connect() {
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      const url = urlBox.value;
-      ws = new WebSocket(url);
-      ws.onopen = function () { add("[connected to " + url + "]\n"); };
-      ws.onclose = function () { add("[disconnected]\n"); };
-      ws.onerror = function () { add("[socket error]\n"); };
-      ws.onmessage = function (ev) { add(typeof ev.data === "string" ? ev.data : "[binary]\n"); };
-    }
-    document.getElementById("connect").onsubmit = function (ev) {
-      ev.preventDefault();
-      connect();
-    };
-    document.getElementById("send").onsubmit = function (ev) {
-      ev.preventDefault();
-      const box = document.getElementById("line");
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(box.value + "\n");
-      }
-      box.value = "";
-    };
-    connect();
-  </script>
+  <p>
+    The public WebSocket client lives at
+    <a href="../../website/client.html">website/client.html</a>.
+  </p>
+  <p>
+    Open that file (or serve the <code>website/</code> folder with any static
+    server) and connect to <code>ws://127.0.0.1:1124</code> while the driver
+    is running.
+  </p>
 </body>
 </html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kjdmud - Web Client</title>
+  <link rel="stylesheet" href="main.css">
+  <link rel="stylesheet" href="client.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <div class="brand">
+        <h1>kjdmud</h1>
+        <span class="tag">LPC game driver</span>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Overview</a>
+        <a href="index.html#features">Features</a>
+        <a href="download.html">Download</a>
+        <a href="documentation.html">Documentation</a>
+        <a href="client.html">Web Client</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="site-main">
+    <h2>Web Client</h2>
+    <p>
+      Browser path onto a running kjdmud process. The driver does not serve this
+      page. Open it from GitHub Pages, from a local static server, or as a file.
+      Default listen port for WebSocket is <code>1124</code>
+      (<code>etc/driver.cfg</code>).
+    </p>
+    <ul class="features">
+      <li>1122 telnet (Mudlet / tin / nc, not this page)</li>
+      <li>1124 websocket (this page, default)</li>
+      <li>1126 telnet + TLS</li>
+      <li>1128 websocket + TLS (<code>wss://127.0.0.1:1128</code> after certs)</li>
+    </ul>
+
+    <div class="client-layout panel">
+      <form id="connect" class="client-toolbar">
+        <label>URL <input id="url" value="ws://127.0.0.1:1124" autocomplete="off"></label>
+        <button type="submit">Connect</button>
+        <button type="button" class="secondary" id="disconnect">Disconnect</button>
+      </form>
+      <p id="status" class="status-line">Not connected</p>
+      <div id="log" aria-live="polite"></div>
+      <form id="send" class="client-compose">
+        <label>Command <input id="line" autocomplete="off" placeholder="type a command"></label>
+        <button type="submit">Send</button>
+      </form>
+    </div>
+
+    <p class="note">
+      Local driver tip:
+      <code>python3 -m http.server 8080 --directory website</code>
+      then open <code>http://127.0.0.1:8080/client.html</code> while
+      <code>./build/kjdmud etc/driver.cfg</code> is running.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      kjdmud is an independent LPC driver. It is not affiliated with FluffOS,
+      LDMud, or DGD.
+    </div>
+  </footer>
+  <script src="main.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>

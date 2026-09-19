@@ -1,3 +1,0 @@
-#/single/domain_graph
-domain "rifts"
-rooms ({({"/domains/rifts/rooms/lower_gate",({"east","/single/gatehouse","west","/domains/rifts/rooms/market_lane","north","/domains/rifts/rooms/watch_post",}),({"poster","A peeling poster: REPORT UNREGISTERED TALENT. Reward posted in credits.",}),({}),}),({"/domains/rifts/rooms/market_lane",({"east","/domains/rifts/rooms/lower_gate",}),({}),({"/domains/rifts/items/slag_bin",}),}),({"/domains/rifts/rooms/watch_post",({"south","/domains/rifts/rooms/lower_gate",}),({"floodlight","A dead floodlight, rusted to the rail. It will not come on.",}),({}),}),})

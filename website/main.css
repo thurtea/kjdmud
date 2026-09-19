@@ -1,0 +1,177 @@
+:root {
+  --bg: #f7f5f0;
+  --bg-panel: #ffffff;
+  --ink: #1a1a1a;
+  --muted: #555555;
+  --line: #cfc8ba;
+  --accent: #1f4f7a;
+  --accent-hover: #163a5a;
+  --code-bg: #eee9df;
+  --ok: #2a5a2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.site-header-inner,
+.site-main,
+.site-footer-inner {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 1.25rem 0 0.5rem;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand .tag {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  padding: 0.5rem 0 1rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.92rem;
+}
+
+.nav a {
+  color: var(--ink);
+}
+
+.nav a[aria-current="page"] {
+  font-weight: 700;
+  border-bottom: 2px solid var(--accent);
+}
+
+.site-main {
+  padding-top: 1.75rem;
+  padding-bottom: 3rem;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.35rem;
+}
+
+h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+.lead {
+  font-size: 1.08rem;
+}
+
+ul.features {
+  margin: 0 0 1.25rem;
+  padding-left: 1.25rem;
+}
+
+ul.features li {
+  margin-bottom: 0.4rem;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  padding: 1rem 1.15rem;
+  margin: 1.25rem 0;
+}
+
+pre,
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+}
+
+.site-footer {
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer-inner {
+  padding: 1rem 1.25rem 1.5rem;
+}
+
+.dl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dl-list li {
+  margin-bottom: 0.85rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.dl-list li:last-child {
+  border-bottom: none;
+}
+
+.dl-list strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 0.95rem;
+}

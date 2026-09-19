@@ -1,5 +1,21 @@
 # STATUS
 
+**2026-09-19: query_ip_port uses accept port.** Multi-port `listen:` meant
+`query_ip_port` returning only `Config::port()` was wrong for websocket
+and TLS listeners. `Connection` now stores the accept port
+(`Server::onNewConnection`); the efun reads it via
+`InteractiveRegistry`. Regression updated. Suite green (2/2 tests).
+
+**2026-09-19: Public site and snapshot purge.** Added `website/` (overview,
+download, documentation, WebSocket client) modeled as a simple project
+site. GitHub Pages workflow deploys `website/` from `main`. README and
+INSTALL now describe only the current driver; INSTALL points the browser
+client at `website/client.html`. Removed `references/` (old local driver
+snapshot trees) from the repository. Deleted `research.md` and
+`docs/dev/TODAY.md`. FluffOS citation sources remain under gitignored
+`temp/` for local development. Next: small FluffOS driver gap in `src/`,
+not another mudlib boot chase.
+
 **2026-09-17: MUD socket read framing.** `Server::pollSockets` assembles
 the 4-byte length header and save_variable body, then
 `parseRestoreVariableTopLevel` for the read callback. Save/restore

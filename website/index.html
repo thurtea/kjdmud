@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kjdmud - Overview</title>
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <div class="brand">
+        <h1>kjdmud</h1>
+        <span class="tag">LPC game driver</span>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Overview</a>
+        <a href="index.html#features">Features</a>
+        <a href="download.html">Download</a>
+        <a href="documentation.html">Documentation</a>
+        <a href="client.html">Web Client</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="site-main">
+    <h2>Overview</h2>
+    <p class="lead">
+      kjdmud is a virtual machine, a network server, and a compiler for the LPC
+      language. It is a from-scratch game driver written in C++20: lexer, parser,
+      bytecode compiler, object system, and call_out / heart_beat scheduler.
+    </p>
+    <p>
+      Players connect over plain telnet, telnet over TLS, or WebSocket.
+      The primary dialect target is FluffOS-style LPC. The
+      <code>dialect</code> config switch can also select LDMud. A small bundled
+      mudlib ships so the driver can boot and be tested.
+    </p>
+
+    <h2 id="features">Features</h2>
+    <p>
+      The goal is a stable, clean, testable driver. Current capabilities include:
+    </p>
+
+    <h3>Runtime</h3>
+    <ul class="features">
+      <li>C++20 host with an LPC-only mudlib layer</li>
+      <li>Bytecode VM, object system, call_out and heart_beat</li>
+      <li>Regression suite run with CMake / CTest</li>
+    </ul>
+
+    <h3>Language</h3>
+    <ul class="features">
+      <li>FluffOS dialect as the primary compatibility target</li>
+      <li>LDMud dialect selectable via config</li>
+      <li>Standard LPC types, applies, and a growing efun surface</li>
+    </ul>
+
+    <h3>Networking</h3>
+    <ul class="features">
+      <li>Multi-port listen table (telnet and WebSocket)</li>
+      <li>TLS on marked listen ports</li>
+      <li>Connection encoding (default UTF-8) and GMCP</li>
+    </ul>
+
+    <h3>Persistence and tooling</h3>
+    <ul class="features">
+      <li>FluffOS-style <code>save_object</code> write path</li>
+      <li>SQLite-backed database efuns</li>
+      <li>Public site and browser WebSocket client under <code>website/</code></li>
+    </ul>
+
+    <div class="panel">
+      <p class="note" style="margin:0">
+        Source and issue tracking live on
+        <a href="https://github.com/thurtea/kjdmud">GitHub</a>.
+        Build instructions are in <a href="documentation.html">Documentation</a>.
+      </p>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      kjdmud is an independent LPC driver. It is not affiliated with FluffOS,
+      LDMud, or DGD.
+    </div>
+  </footer>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -21813,7 +21813,7 @@ static void testHeartBeatsListsEveryObjectWithHeartbeatEnabledSkippingDestructed
     std::cout << "testHeartBeatsListsEveryObjectWithHeartbeatEnabledSkippingDestructed OK\n";
 }
 
-static void testQueryIpPortReturnsConfiguredPortForInteractiveElseZero() {
+static void testQueryIpPortReturnsConnectionLocalPortForInteractiveElseZero() {
     ObjectVarHarness harness;
     harness.writeFile("/qip_probe.c", "int probe(object ob) { return query_ip_port(ob); }\n");
     harness.writeFile("/qip_plain.c", "void create() {}\n");
@@ -21825,16 +21825,19 @@ static void testQueryIpPortReturnsConfiguredPortForInteractiveElseZero() {
     int fds[2];
     assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
     kjdmud::Connection conn(fds[0]);
+    // Multi-port listen: the accept port is recorded on the Connection,
+    // not assumed to be Config::port().
+    conn.setLocalPort(4455);
     conn.attach(interactive);
 
     kjdmud::Value connected = harness.vm.callFunction(probe, "probe", {kjdmud::Value(interactive)});
-    assert(std::get<int64_t>(connected.data) == harness.config.port());
+    assert(std::get<int64_t>(connected.data) == 4455);
 
     kjdmud::Value notConnected = harness.vm.callFunction(probe, "probe", {kjdmud::Value(plain)});
     assert(std::get<int64_t>(notConnected.data) == 0);
 
     ::close(fds[1]);
-    std::cout << "testQueryIpPortReturnsConfiguredPortForInteractiveElseZero OK\n";
+    std::cout << "testQueryIpPortReturnsConnectionLocalPortForInteractiveElseZero OK\n";
 }
 
 // named_livings(): only objects with a real set_living_name() entry AND
@@ -32353,7 +32356,7 @@ int main() {
     testFileLengthCountsNewlinesAndReturnsNegativeForMissingOrDirectory();
     testRefsReflectsSharedReferenceCountMinusOne();
     testHeartBeatsListsEveryObjectWithHeartbeatEnabledSkippingDestructed();
-    testQueryIpPortReturnsConfiguredPortForInteractiveElseZero();
+    testQueryIpPortReturnsConnectionLocalPortForInteractiveElseZero();
     testNamedLivingsListsOnlyLivingNamedObjectsWithCommandsEnabledRespectingHidden();
     testQueryNotifyFailPeeksPendingMessageWithoutConsumingIt();
     testRequestTermSizeSendsIacDoNawsAndIsNoOpWithoutInteractiveCommandGiver();

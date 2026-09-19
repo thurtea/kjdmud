@@ -7871,16 +7871,10 @@ void registerCoreEfuns() {
 
     // int query_ip_port(void|object ob default: command_giver). real
     // packages/contrib.c's own query_ip_port(): the local port number
-    // ob's connection is using. This driver has exactly one listening
-    // port (Config::port(), Server::listen()'s own single accept loop.
-    // Confirmed by grep, no multi-port SocketRegistry exists), so unlike
-    // query_ip_number()/query_ip_name() above (which fall back to "only
-    // the current connection" since a real per-connection lookup would
-    // need one), this one supports the real explicit ob argument
-    // properly: any currently-interactive object's real answer is always
-    // the single configured port, not something that needs tracking per
-    // Connection. Returns 0 if ob (or, with no argument, command_giver)
-    // is not currently interactive, matching real query_ip_port(0)'s own
+    // ob's connection is using. With multi-port listen:, each Connection
+    // records the accept port (Server::onNewConnection). Returns 0 if
+    // ob (or, with no argument, command_giver) is not currently
+    // interactive, matching real query_ip_port(0)'s own
     // "!ob->interactive" branch.
     t.registerEfun("query_ip_port", [](VM& vm, std::vector<Value>& args) -> Value {
         std::shared_ptr<LpcObject> ob;
@@ -7889,8 +7883,12 @@ void registerCoreEfuns() {
         } else {
             ob = resolveCommandGiver(vm);
         }
-        if (!ob || !InteractiveRegistry::find(ob)) return Value(int64_t{0});
-        return Value(static_cast<int64_t>(vm.config().port()));
+        if (!ob) return Value(int64_t{0});
+        Connection* conn = InteractiveRegistry::find(ob);
+        if (!conn) return Value(int64_t{0});
+        int port = conn->localPort();
+        if (port <= 0) port = vm.config().port();
+        return Value(static_cast<int64_t>(port));
     });
 
     // socket_* efun family (ROADMAP row 0.10). Signatures, mode/state

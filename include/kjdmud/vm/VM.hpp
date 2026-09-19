@@ -66,11 +66,8 @@ public:
     Scheduler* scheduler() const { return scheduler_; }
 
     // Read-only access to the driver's own configuration. Needed by
-    // efuns whose real answer is a single, driver-wide fact rather than
-    // per-connection state (e.g. query_ip_port(): this driver has exactly
-    // one listening port, Config::port(), so any currently-interactive
-    // object's real answer is that value, not something tracked per
-    // Connection).
+    // efuns whose answer is a driver-wide fact (listen table, mud name,
+    // paths) rather than only per-connection state.
     Config& config() const { return config_; }
 
     // origin defaults to Origin::Driver, correct for the majority of

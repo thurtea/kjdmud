@@ -86,6 +86,11 @@ public:
     int fd() const { return fd_; }
     bool isOpen() const { return fd_ >= 0; }
 
+    // Local listen port this connection was accepted on. Multi-port
+    // listen means query_ip_port() must read this, not Config::port().
+    void setLocalPort(int port) { localPort_ = port; }
+    int localPort() const { return localPort_; }
+
     // Registers the object in InteractiveRegistry (real FluffOS's
     // all_users[]/users() and find_player() need to find it later) in
     // addition to just recording it here.
@@ -280,6 +285,7 @@ private:
     std::string decodeWsFrames(std::string incoming);
 
     int fd_;
+    int localPort_ = 0;
     SSL* ssl_ = nullptr;
     bool useWebSocket_ = false;
     bool wsHandshakeDone_ = false;
