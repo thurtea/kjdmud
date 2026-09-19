@@ -9573,25 +9573,38 @@ static void testCallStackMode3ReturnsPerFrameOriginCurrentFirst() {
     std::cout << "testCallStackMode3ReturnsPerFrameOriginCurrentFirst OK\n";
 }
 
-static void testCallStackMode2StillThrowsAndOutOfRangeThrows() {
+static void testCallStackMode2ReturnsPerFrameFunctionNamesCurrentFirst() {
+    ObjectVarHarness harness;
+    harness.writeFile("/cs_name_callee.c",
+        "mixed *probe() { return call_stack(2); }\n");
+    harness.writeFile("/cs_name_caller.c",
+        "mixed *start(object callee) { return callee->probe(); }\n");
+    auto callee = harness.objects.cloneObject("/cs_name_callee");
+    auto caller = harness.objects.cloneObject("/cs_name_caller");
+    assert(callee != nullptr && caller != nullptr);
+
+    kjdmud::Value result = harness.vm.callFunction(caller, "start", {kjdmud::Value(callee)});
+    auto* arr = std::get_if<std::shared_ptr<kjdmud::Array>>(&result.data);
+    assert(arr != nullptr && (*arr)->items.size() >= 2);
+    assert(std::get<std::string>((*arr)->items[0].data) == "probe");
+    assert(std::get<std::string>((*arr)->items[1].data) == "start");
+
+    std::cout << "testCallStackMode2ReturnsPerFrameFunctionNamesCurrentFirst OK\n";
+}
+
+static void testCallStackOutOfRangeThrows() {
     ObjectVarHarness harness;
     harness.writeFile("/cs_err.c",
-        "mixed *probe_fn() { return call_stack(2); }\n"
         "mixed *probe_bad() { return call_stack(9); }\n");
     auto ob = harness.objects.cloneObject("/cs_err");
     assert(ob != nullptr);
-
-    bool threwFn = false;
-    try { harness.vm.callFunction(ob, "probe_fn", {}); }
-    catch (const kjdmud::LpcRuntimeError&) { threwFn = true; }
-    assert(threwFn);
 
     bool threwBad = false;
     try { harness.vm.callFunction(ob, "probe_bad", {}); }
     catch (const kjdmud::LpcRuntimeError&) { threwBad = true; }
     assert(threwBad);
 
-    std::cout << "testCallStackMode2StillThrowsAndOutOfRangeThrows OK\n";
+    std::cout << "testCallStackOutOfRangeThrows OK\n";
 }
 
 static void testCommandsReturnsRegisteredActionsOnTheCommandGiverItself() {
@@ -31929,7 +31942,8 @@ int main() {
     testVirtualpTrueOnlyForACompileObjectResultAndDefaultsToThisObject();
     testCallStackMode1ReturnsObjectsCurrentFirstWalkingOutward();
     testCallStackMode3ReturnsPerFrameOriginCurrentFirst();
-    testCallStackMode2StillThrowsAndOutOfRangeThrows();
+    testCallStackMode2ReturnsPerFrameFunctionNamesCurrentFirst();
+    testCallStackOutOfRangeThrows();
     testCommandsReturnsRegisteredActionsOnTheCommandGiverItself();
     testSocketAddressForInteractiveObjectReturnsPeerAddrAndPortOrZero();
     testSocketAddressForHandleDistinguishesLocalFromRemote();

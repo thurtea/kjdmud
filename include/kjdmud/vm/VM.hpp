@@ -238,11 +238,12 @@ public:
     // filenames) is derived from this same stack's own objects'
     // filenames, since this driver has no separate per-frame program
     // pointer distinct from "whichever object's function is running".
-    // Mode 2 (per-frame function name) still has no backing data here at
-    // all. See call_stack()'s own EfunTable.cpp registration comment.
-    // Mode 3 (per-frame origin) reads originStack_ via originFrames(),
-    // zip-aligned from the innermost frame (see call_stack mode 3).
+    // Mode 2 (per-frame function name) reads functionNameFrames(), kept
+    // in lockstep with callStack_ by ObjectFrameGuard. Mode 3 (per-frame
+    // origin) reads originStack_ via originFrames(), zip-aligned from the
+    // innermost frame (see call_stack mode 3).
     const std::vector<std::shared_ptr<LpcObject>>& callFrames() const { return callStack_; }
+    const std::vector<std::string>& functionNameFrames() const { return functionNameStack_; }
     const std::vector<Origin>& originFrames() const { return originStack_; }
 
     // See originStack_'s own comment. currentOrigin() defaults to
@@ -530,6 +531,9 @@ private:
     // One entry per still-active run() call, innermost last. see
     // currentObject() and run()'s StackGuard.
     std::vector<std::shared_ptr<LpcObject>> callStack_;
+    // Per-frame function names, same length and lifetime as callStack_
+    // (pushed/popped inside ObjectFrameGuard). Backs call_stack(2).
+    std::vector<std::string> functionNameStack_;
     // One entry per still-active *object-changing* call, innermost
     // last. See previousObject()/allPreviousObjects() and run()'s own
     // comment on how an object change is detected.

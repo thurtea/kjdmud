@@ -1,10 +1,16 @@
 # STATUS
 
+**2026-09-19: call_stack mode 2 (function names).** `ObjectFrameGuard`
+now pushes/pops a per-frame function name in lockstep with
+`callStack_`. `call_stack(2)` returns those names, current first.
+`call_stack` modes 0-3 are all live. Regression added. Suite green
+(2/2 tests).
+
 **2026-09-19: call_stack mode 3 (origin).** `call_stack(3)` returns
 per-frame `origin_name` strings, current frame first. Reads
 `originFrames()` and zip-aligns from the innermost call frame so an
 extra `ObjectFrameGuard` from a core-efun closure (no OriginGuard) does
-not steal another frame's origin. Mode 2 (function names) still throws.
+not steal another frame's origin. Mode 2 followed in the next entry.
 Regression added. Suite green (2/2 tests).
 
 **2026-09-19: query_ip_number/name honor object arg.** Both efuns resolve

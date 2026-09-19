@@ -4701,25 +4701,14 @@ void registerCoreEfuns() {
     // confirmed directly (not guessed): flag selects what each frame
     // reports, current frame first (index 0), walking outward. Real
     // modes: 0 = per-frame program filename, 1 = per-frame object, 2 =
-    // per-frame function name, 3 = per-frame origin. This driver's own
-    // VM::callFrames() (a plain accessor over the same callStack_
-    // currentObject() itself reads) only ever tracked *objects* per
-    // frame, confirmed directly, not assumed, so mode 1 is exactly
-    // real, and mode 0 is derived from those same objects' own
-    // filenames (this driver has no separate "program" identity from
-    // "the object currently running", unlike real FluffOS's own
-    // current_prog/csp->prog distinction, but every real call site this
-    // mudlib has, secure/SimulEfun/misc.c's own get_stack(), only
-    // ever indexes call_stack(0)/call_stack(2) results through
-    // identify(), which does not care about that distinction for a
-    // plain object). Mode 2 has no backing data anywhere in this driver
-    // (no per-frame function-name tracking exists) and still throws.
-    // Mode 3 reads originFrames() (originStack_), zip-aligned from the
-    // innermost call frame. callStack_ can be one longer than
-    // originStack_ when callClosure() pushes ObjectFrameGuard for a
-    // core-efun closure without an OriginGuard (real efuns have no
-    // control-stack frame); those unpaired outer-current frames report
-    // "driver".
+    // per-frame function name, 3 = per-frame origin. Modes 0/1 read
+    // callFrames(). Mode 2 reads functionNameFrames() (same length as
+    // callStack_, pushed by ObjectFrameGuard). Mode 3 reads
+    // originFrames() zip-aligned from the innermost call frame;
+    // callStack_ can be longer than originStack_ when callClosure()
+    // pushes ObjectFrameGuard for a core-efun closure without an
+    // OriginGuard (real efuns have no control-stack frame); those
+    // unpaired frames report "driver".
     t.registerEfun("call_stack", [](VM& vm, std::vector<Value>& args) -> Value {
         if (args.empty() || !std::holds_alternative<int64_t>(args[0].data)) {
             throw LpcRuntimeError("call_stack: expected an int argument");
@@ -4728,12 +4717,8 @@ void registerCoreEfuns() {
         if (mode < 0 || mode > 3) {
             throw LpcRuntimeError("call_stack: first argument must be 0, 1, 2, or 3");
         }
-        if (mode == 2) {
-            throw LpcRuntimeError(
-                "call_stack: mode 2 (function names) is not implemented. "
-                "This driver's call stack does not track per-frame function names");
-        }
         const auto& frames = vm.callFrames();
+        const auto& names = vm.functionNameFrames();
         const auto& origins = vm.originFrames();
         auto result = std::make_shared<Array>();
         result->items.reserve(frames.size());
@@ -4744,6 +4729,7 @@ void registerCoreEfuns() {
             frames.size() > origins.size() ? frames.size() - origins.size() : 0;
         size_t seen = 0;
         size_t originIdx = origins.size();
+        size_t nameIdx = names.size();
         for (auto it = frames.rbegin(); it != frames.rend(); ++it, ++seen) {
             const auto& ob = *it;
             if (mode == 3) {
@@ -4753,6 +4739,13 @@ void registerCoreEfuns() {
                     origin = origins[originIdx];
                 }
                 result->items.push_back(Value(std::string(originName(origin))));
+            } else if (mode == 2) {
+                std::string name;
+                if (nameIdx > 0) {
+                    --nameIdx;
+                    name = names[nameIdx];
+                }
+                result->items.push_back(Value(std::move(name)));
             } else if (mode == 1) {
                 result->items.push_back(ob ? Value(ob) : Value{});
             } else {

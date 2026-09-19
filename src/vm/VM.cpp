@@ -130,16 +130,21 @@ class ObjectFrameGuard {
 public:
     ObjectFrameGuard(std::vector<std::shared_ptr<kjdmud::LpcObject>>& callStack,
                       std::vector<std::shared_ptr<kjdmud::LpcObject>>& objectChangeStack,
-                      const std::shared_ptr<kjdmud::LpcObject>& obj)
-        : callStack_(callStack), objectChangeStack_(objectChangeStack) {
+                      std::vector<std::string>& functionNameStack,
+                      const std::shared_ptr<kjdmud::LpcObject>& obj,
+                      std::string functionName)
+        : callStack_(callStack), objectChangeStack_(objectChangeStack),
+          functionNameStack_(functionNameStack) {
         objectChanged_ = callStack_.empty() || callStack_.back() != obj;
         if (objectChanged_) {
             objectChangeStack_.push_back(callStack_.empty() ? nullptr : callStack_.back());
         }
         callStack_.push_back(obj);
+        functionNameStack_.push_back(std::move(functionName));
     }
     ~ObjectFrameGuard() {
         callStack_.pop_back();
+        functionNameStack_.pop_back();
         if (objectChanged_) objectChangeStack_.pop_back();
     }
     ObjectFrameGuard(const ObjectFrameGuard&) = delete;
@@ -148,6 +153,7 @@ public:
 private:
     std::vector<std::shared_ptr<kjdmud::LpcObject>>& callStack_;
     std::vector<std::shared_ptr<kjdmud::LpcObject>>& objectChangeStack_;
+    std::vector<std::string>& functionNameStack_;
     bool objectChanged_ = false;
 };
 
@@ -1019,7 +1025,8 @@ Value VM::callClosure(const std::shared_ptr<Closure>& closure, std::vector<Value
         if (!EfunTable::instance().exists(closure->functionName)) {
             throw LpcRuntimeError("evaluate(): undefined efun: " + closure->functionName);
         }
-        ObjectFrameGuard objectFrameGuard(callStack_, objectChangeStack_, owner);
+        ObjectFrameGuard objectFrameGuard(
+            callStack_, objectChangeStack_, functionNameStack_, owner, closure->functionName);
         return EfunTable::instance().call(closure->functionName, *this, args);
     }
 
@@ -1074,7 +1081,8 @@ Value VM::callClosure(const std::shared_ptr<Closure>& closure, std::vector<Value
         // difference either way. Leaving originStack_ untouched here
         // is behaviorally identical to real semantics, just without the
         // unobservable intermediate step.
-        ObjectFrameGuard objectFrameGuard(callStack_, objectChangeStack_, owner);
+        ObjectFrameGuard objectFrameGuard(
+            callStack_, objectChangeStack_, functionNameStack_, owner, closure->functionName);
         return EfunTable::instance().call(closure->functionName, *this, args);
     }
 
@@ -1587,7 +1595,8 @@ Value VM::run(const CompiledProgram& program, const FunctionEntry& fn,
     // both propagate straight out of the while loop below), and a
     // destructor is the only pop that reliably covers all of them. See
     // ObjectFrameGuard's own comment for the real-semantics citation.
-    ObjectFrameGuard objectFrameGuard(callStack_, objectChangeStack_, obj);
+    ObjectFrameGuard objectFrameGuard(
+        callStack_, objectChangeStack_, functionNameStack_, obj, fn.name);
 
     // Base offset to add to this program's own PushObjectVar/
     // StoreObjectVar slot numbers before indexing obj->variables() (see
