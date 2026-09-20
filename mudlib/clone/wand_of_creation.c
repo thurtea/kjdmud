@@ -94,6 +94,54 @@ static void maybe_save() {
     }
 }
 
+// Real MUD convention (see this file's own wand_ids above): a player
+// should be able to refer to a multi-word created item by any of its
+// significant words, not only by the exact full name they typed at
+// creation. set_ids(({ str })) alone (this file's own original
+// generation) only ever matched that one literal string, so a "rusty
+// key" made via "create a rusty key" could never be found again by
+// "key" or "rusty key" once the room contained anything else. Splits
+// on spaces, drops articles/"of", dedupes, and always keeps the full
+// name too.
+static string *id_stopwords = ({ "a", "an", "the", "of" });
+
+static string *ids_for_name(string name) {
+    string *words, *ids;
+    int i;
+
+    ids = ({ name });
+    words = explode(name, " ");
+    for (i = 0; i < sizeof(words); i++) {
+        if (!words[i] || !sizeof(words[i])) {
+            continue;
+        }
+        if (member_array(words[i], id_stopwords) != -1) {
+            continue;
+        }
+        if (member_array(words[i], ids) == -1) {
+            ids += ({ words[i] });
+        }
+    }
+    return ids;
+}
+
+// Renders an id array as LPC array-literal source text, for embedding
+// directly into a generated file's own set_ids(...) call.
+static string ids_literal(string *ids) {
+    string out;
+    int i;
+
+    out = "({ ";
+    for (i = 0; i < sizeof(ids); i++) {
+        out += "\"" + ids[i] + "\"";
+        if (i + 1 < sizeof(ids)) {
+            out += ", ";
+        }
+    }
+    out += " })";
+    return out;
+}
+
 static string created_source_path(object ob) {
     string leaf, dom, kind;
 
@@ -253,7 +301,7 @@ int cmd_create(string str) {
         "void create() {\n"
         "    set_short(\"" + str + "\");\n"
         "    set_long(\"" + str + ", freshly made by the wand of creation.\\n\");\n"
-        "    set_ids(({ \"" + str + "\" }));\n"
+        "    set_ids(" + ids_literal(ids_for_name(str)) + ");\n"
         "    set_weight(1);\n"
         "    set_value(1);\n"
         "}\n";
@@ -284,7 +332,7 @@ int cmd_create(string str) {
 
 int cmd_edit(string str) {
     string id, rest, path, body, old_short;
-    object ob;
+    object ob, env;
 
     if (!may_use()) {
         return 1;
@@ -314,18 +362,52 @@ int cmd_edit(string str) {
     if (!old_short || old_short == "") {
         old_short = id;
     }
+    env = environment(ob);
+
+    // Real ids come from old_short (the item's own full name), not the
+    // single word used to find it here: "edit key ..." on "a rusty key"
+    // must not collapse its ids down to just "key", losing "rusty" and
+    // the full name as ways to refer to it afterward.
     body = "// made by the wand of creation\n"
         "inherit \"" ITEM_INH "\";\n"
         "void create() {\n"
         "    set_short(\"" + old_short + "\");\n"
         "    set_long(\"" + rest + "\\n\");\n"
-        "    set_ids(({ \"" + id + "\" }));\n"
+        "    set_ids(" + ids_literal(ids_for_name(old_short)) + ");\n"
         "    set_weight(1);\n"
         "    set_value(1);\n"
         "}\n";
     write_file(path + ".c", body, 1);
-    reload_object(ob);
-    write("Rewrote " + path + ".c\n");
+
+    // reload_object(ob) (this file's own original approach) does not
+    // recompile: real reload_object() only re-runs the object's already
+    // -compiled program from scratch, matching real FluffOS object.c
+    // exactly, so it never picks up the new source just written to
+    // disk. Destructing and reloading the blueprint from that file
+    // (the same pattern cmd_create/cmd_room/cmd_npc already use) is
+    // what actually recompiles it.
+    destruct(ob);
+    if (find_object(path)) {
+        destruct(find_object(path));
+    }
+    ob = load_object(path);
+    if (!ob) {
+        write("Edit failed: could not compile " + path + ".c\n");
+        return 1;
+    }
+    ob = clone_object(path);
+    if (!ob) {
+        write("Edit failed: could not clone " + path + ".c\n");
+        return 1;
+    }
+    if (env && !catch(ob->move(env))) {
+        write("Rewrote " + path + ".c\n");
+    } else if (!catch(ob->move(this_player()))) {
+        write("Rewrote " + path + ".c (moved to your inventory)\n");
+    } else {
+        write("Rewrote " + path + ".c but could not place it; destructing it.\n");
+        destruct(ob);
+    }
     return 1;
 }
 
@@ -419,7 +501,7 @@ int cmd_npc(string str) {
         "    set_name(\"" + str + "\");\n"
         "    set_short(\"" + str + "\");\n"
         "    set_long(\"" + str + ", a newly made NPC.\\n\");\n"
-        "    set_ids(({ \"" + str + "\" }));\n"
+        "    set_ids(" + ids_literal(ids_for_name(str)) + ");\n"
         "}\n";
     write_file(path + ".c", body, 1);
 
