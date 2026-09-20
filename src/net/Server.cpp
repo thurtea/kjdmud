@@ -506,6 +506,13 @@ void Server::handleConnection(Connection& conn) {
         conn.send(std::string("\xff\xfd\x18", 3));
         conn.send(std::string("\xff\xfd\x1f", 3));
         conn.send(std::string("\xff\xfb\xc9", 3));
+        // MSSP (option 70/0x46; see Connection::sendMssp()'s own comment).
+        // Missing here originally: onNewConnection()'s telnet-only offer
+        // added it alongside GMCP, but this WebSocket-side parity offer
+        // (found live-testing client.html's own WebSocket connection
+        // against a running driver) never got the same addition, so a
+        // WS client never saw a WILL MSSP to reply to at all.
+        conn.send(std::string("\xff\xfb\x46", 3));
     }
 
     auto obj = conn.boundObject();

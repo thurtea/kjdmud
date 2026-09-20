@@ -12,6 +12,8 @@ main(string arg)
         "  take <id>      pick up something in the room\n"
         "  get <id>       same as take\n"
         "  drop <id>      put down something you are carrying\n"
+        "  inventory      list what you are carrying\n"
+        "  inv            same as inventory\n"
         "  say <text>     speak to everyone in your room\n"
         "  who            list connected players\n"
         "  eval <code>    compile and run one LPC statement, e.g.\n"

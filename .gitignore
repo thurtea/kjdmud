@@ -9,6 +9,11 @@ build_debug/
 # content any time eval is exercised, never meant to be tracked.
 mudlib/tmp_eval_file.c
 
+# Real player save data (account/character files), created at runtime
+# by any live connection, testing included. Never sample content.
+mudlib/accounts/
+mudlib/characters/
+
 # Vendored FluffOS reference build tree artifacts (kept for citation only,
 # never compiled as part of this project's own build)
 reference/fluffos-2.9-ds2.08/tmp/

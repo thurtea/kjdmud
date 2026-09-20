@@ -6,6 +6,8 @@ Commands you can actually run here:
   take <id>      pick up something in the room
   get <id>       same as take
   drop <id>      put down something you are carrying
+  inventory      list what you are carrying
+  inv            same as inventory
   say <text>     speak to everyone in your room
   who            list connected players
   eval <code>    compile and run one LPC statement, e.g.

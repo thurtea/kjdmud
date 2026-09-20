@@ -213,6 +213,8 @@ commandHook(string arg)
 	return (int)cobj->main(arg);
     } else {
 	// maybe call an emote/soul daemon here
+	write("Unknown command. Type 'help' for the list of commands.\n");
+	return 1;
     }
     return 0;
 }
