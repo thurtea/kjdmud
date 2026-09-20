@@ -1,5 +1,6 @@
 #include "kjdmud/efun/EfunTable.hpp"
 #include "kjdmud/efun/DbRegistry.hpp"
+#include "kjdmud/efun/TestResultsRegistry.hpp"
 #include "kjdmud/core/Errors.hpp"
 #include "kjdmud/vm/VM.hpp"
 #include "kjdmud/vm/SaveVariable.hpp"
@@ -12287,6 +12288,156 @@ void registerCoreEfuns() {
             throw LpcRuntimeError("db_conv_string: expected a string argument");
         }
         return Value(DbRegistry::convString(std::get<std::string>(args[0].data)));
+    });
+
+    // ROADMAP.md row 2.22: LPC-native test runner. assert_equal,
+    // assert_not_equal, assert_throws, test_pass, test_fail, run_tests.
+    // These are driver-added conveniences for writing tests directly in
+    // LPC test files (mirroring this project's own C++ test_lexer.cpp
+    // convention at the LPC level), not a port of any real FluffOS/
+    // LDMud/DGD efun. No func_spec.c citation exists for any of them.
+    // See TestResultsRegistry.hpp for the shared results buffer these
+    // six efuns operate on.
+
+    // A short, human-readable tag for a value in an assert_equal/
+    // assert_not_equal failure message. Not a general value formatter:
+    // this driver has none (see LpcThrownValue::describeForWhat()'s own
+    // comment in Value.hpp for why one was deliberately not built).
+    // Scalars print their real content; every reference type just names
+    // its kind, matching typeof()'s own type-name set above.
+    auto describeForAssert = [](const Value& v) -> std::string {
+        if (auto* i = std::get_if<int64_t>(&v.data)) return std::to_string(*i);
+        if (auto* d = std::get_if<double>(&v.data)) return std::to_string(*d);
+        if (auto* s = std::get_if<std::string>(&v.data)) return "\"" + *s + "\"";
+        if (std::holds_alternative<std::shared_ptr<Array>>(v.data)) return "(array)";
+        if (std::holds_alternative<std::shared_ptr<Mapping>>(v.data)) return "(mapping)";
+        if (std::holds_alternative<std::shared_ptr<LpcObject>>(v.data)) return "(object)";
+        if (std::holds_alternative<std::shared_ptr<Closure>>(v.data)) return "(function)";
+        if (std::holds_alternative<std::shared_ptr<Buffer>>(v.data)) return "(buffer)";
+        return "0";
+    };
+
+    // void assert_equal(mixed a, mixed b). Throws (matching this file's
+    // own "assert" naming convention: a thrown LpcRuntimeError is a test
+    // failure a caller can catch, exactly like every other error() this
+    // driver raises) if the two values are not equal under this driver's
+    // own valuesEqual() (the same equality "==" itself uses, VM.cpp's
+    // OpCode::Equal handler).
+    t.registerEfun("assert_equal", [describeForAssert](VM&, std::vector<Value>& args) -> Value {
+        if (args.size() < 2) {
+            throw LpcRuntimeError("assert_equal: expected (mixed a, mixed b)");
+        }
+        if (!valuesEqual(args[0], args[1])) {
+            throw LpcRuntimeError("assert_equal: " + describeForAssert(args[0]) +
+                                   " != " + describeForAssert(args[1]));
+        }
+        return Value{};
+    });
+
+    // void assert_not_equal(mixed a, mixed b). The inverse check.
+    t.registerEfun("assert_not_equal", [describeForAssert](VM&, std::vector<Value>& args) -> Value {
+        if (args.size() < 2) {
+            throw LpcRuntimeError("assert_not_equal: expected (mixed a, mixed b)");
+        }
+        if (valuesEqual(args[0], args[1])) {
+            throw LpcRuntimeError("assert_not_equal: " + describeForAssert(args[0]) +
+                                   " == " + describeForAssert(args[1]));
+        }
+        return Value{};
+    });
+
+    // string assert_throws(function fn). Calls fn with no arguments;
+    // catches LpcRuntimeError (LpcThrownValue is-a LpcRuntimeError, so a
+    // plain LPC throw() is caught here too) and returns its message.
+    // fn completing without throwing is itself the assertion failure
+    // (matching assert_equal/assert_not_equal's own "throw on a failed
+    // assertion" convention), not a silent 0 return a caller could miss.
+    t.registerEfun("assert_throws", [](VM& vm, std::vector<Value>& args) -> Value {
+        auto* closurePtr = args.empty() ? nullptr : std::get_if<std::shared_ptr<Closure>>(&args[0].data);
+        if (!closurePtr || !*closurePtr) {
+            throw LpcRuntimeError("assert_throws: expected a function argument");
+        }
+        try {
+            vm.callClosure(*closurePtr, {});
+        } catch (const LpcRuntimeError& e) {
+            return Value(std::string(e.what()));
+        }
+        throw LpcRuntimeError("assert_throws: function did not throw");
+    });
+
+    // void test_pass(string name) / void test_fail(string name, string
+    // reason). Append one entry to the shared results buffer directly;
+    // usable standalone or from inside a run_tests() pass.
+    t.registerEfun("test_pass", [](VM&, std::vector<Value>& args) -> Value {
+        if (args.empty() || !std::holds_alternative<std::string>(args[0].data)) {
+            throw LpcRuntimeError("test_pass: expected a string name argument");
+        }
+        TestResultsRegistry::record(std::get<std::string>(args[0].data), true, "");
+        return Value{};
+    });
+    t.registerEfun("test_fail", [](VM&, std::vector<Value>& args) -> Value {
+        if (args.empty() || !std::holds_alternative<std::string>(args[0].data)) {
+            throw LpcRuntimeError("test_fail: expected a string name argument");
+        }
+        std::string reason = (args.size() > 1 && std::holds_alternative<std::string>(args[1].data))
+                                  ? std::get<std::string>(args[1].data)
+                                  : std::string();
+        TestResultsRegistry::record(std::get<std::string>(args[0].data), false, reason);
+        return Value{};
+    });
+
+    // int run_tests(object test_ob). Clears the shared results buffer,
+    // then calls every function declared on test_ob (including inherited
+    // ones, deduplicated child-first, matching functions()'s own default
+    // walk above) whose name starts with "test_". A call that throws
+    // LpcRuntimeError (typically from assert_equal/assert_not_equal/
+    // assert_throws inside the test function's own body) is recorded as
+    // a failure with the caught message; a call that returns normally is
+    // recorded as a pass. Origin::Efun matches map_array/filter_array/
+    // sort_array's own "mudlib-supplied callback invoked from an efun's
+    // own C body" category above. Returns the number of test_* functions
+    // run. If Config::testResultsPath() is set, also writes the full
+    // buffer (including any test_pass()/test_fail() calls a test
+    // function made directly) to that path as a JSON array.
+    t.registerEfun("run_tests", [](VM& vm, std::vector<Value>& args) -> Value {
+        if (args.empty() || !std::holds_alternative<std::shared_ptr<LpcObject>>(args[0].data)) {
+            throw LpcRuntimeError("run_tests: expected an object argument");
+        }
+        auto testOb = std::get<std::shared_ptr<LpcObject>>(args[0].data);
+        if (!testOb) throw LpcRuntimeError("run_tests: expected a non-null object argument");
+
+        TestResultsRegistry::clear();
+
+        std::vector<std::string> testFunctionNames;
+        std::unordered_set<std::string> seen;
+        std::function<void(const CompiledProgram&)> collect =
+            [&](const CompiledProgram& prog) {
+                for (const auto& fn : prog.functions) {
+                    if (fn.name.rfind("test_", 0) != 0) continue;
+                    if (!seen.insert(fn.name).second) continue;
+                    testFunctionNames.push_back(fn.name);
+                }
+                for (const auto& parent : prog.inheritedPrograms) {
+                    if (parent) collect(*parent);
+                }
+            };
+        collect(testOb->program());
+
+        for (const auto& name : testFunctionNames) {
+            try {
+                vm.callFunction(testOb, name, {}, Origin::Efun);
+                TestResultsRegistry::record(name, true, "");
+            } catch (const LpcRuntimeError& e) {
+                TestResultsRegistry::record(name, false, e.what());
+            }
+        }
+
+        const std::string& resultsPath = vm.config().testResultsPath();
+        if (!resultsPath.empty()) {
+            TestResultsRegistry::writeJsonFile(resultsPath);
+        }
+
+        return Value(static_cast<int64_t>(testFunctionNames.size()));
     });
 
     registerNetEfuns();

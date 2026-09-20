@@ -80,6 +80,37 @@ public:
         return out;
     }
 
+    // One-shot flag, same shape as takeWindowSizeUpdate()/
+    // takeTerminalTypeUpdate() below: set once by handleNegotiation()
+    // when the client replies "IAC DO MSSP" to this driver's own
+    // proactive "IAC WILL MSSP" (sent by Server::onNewConnection() for
+    // every telnet connection), consumed by Server::handleConnection()
+    // to send the one-time MSSP data block (MsspHandler::sendServerInfo()),
+    // which needs Config/player-count access this class deliberately
+    // does not have.
+    bool takeMsspNegotiated() {
+        bool had = msspNegotiated_;
+        msspNegotiated_ = false;
+        return had;
+    }
+
+    // MUD Server Status Protocol (telnet option 70/0x46) one-time data
+    // block: "IAC SB MSSP MSSP_VAR name MSSP_VAL value ... IAC SE". A
+    // public, client-facing telnet protocol (tintin.mudhalla.net/
+    // protocols/mssp), not specific to any one real LP driver's own C
+    // source; no vendored reference driver is present on disk to cite
+    // against for this row either way. First-slice variable set: NAME,
+    // PLAYERS, UPTIME, CODEBASE. The real spec has many more optional
+    // variables (CONTACT, FAMILY, GENRE, ...); nothing in this driver
+    // has a real value to report for any of them yet, so they are left
+    // out rather than sent as fabricated placeholders. Lives here
+    // rather than in src/proto/ like GmcpHandler: this is a one-way,
+    // Server-triggered send with no receiving/parsing side, and
+    // src/proto already depends on src/net (for Connection itself), so
+    // a Server-called src/proto class would be a circular library
+    // dependency.
+    void sendMssp(const std::string& mudName, int playerCount, int uptimeSeconds);
+
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
@@ -296,6 +327,7 @@ private:
     std::string encoding_ = "utf-8";
     bool gmcpEnabled_ = false;
     std::vector<std::string> incomingGmcp_;
+    bool msspNegotiated_ = false;
     std::string inputBuffer_;
     std::shared_ptr<LpcObject> boundObject_;
     bool closed_ = false;

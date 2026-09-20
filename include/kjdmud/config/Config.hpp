@@ -98,6 +98,25 @@ public:
     const std::string& tlsCert() const { return tlsCert_; }
     const std::string& tlsKey() const { return tlsKey_; }
 
+    // Maximum simultaneous player connections (src/config/instruct.md
+    // Phase 0). Server::onNewConnection() rejects (closes without ever
+    // reaching master->connect()) any new connection once
+    // connectionCount() is already at this value. No real driver source
+    // is present on disk to cite an exact FluffOS/LDMud/DGD MAX_USERS
+    // rejection behavior against, so this is a plain accept-or-close
+    // gate, not a verified port of any specific reference driver's own
+    // over-limit handling.
+    int maxConnections() const { return maxConnections_; }
+
+    // Real filesystem path run_tests() writes its JSON results file to
+    // (ROADMAP.md row 2.22). Empty (the default) means "not configured",
+    // so run_tests() skips writing a file at all rather than dropping one
+    // into the process's working directory on every driver boot. This is
+    // a driver-level path, not run through the mudlib's own valid_write()
+    // jail, matching tlsCert()/tlsKey() above (also real filesystem
+    // paths outside LPC's own virtual filesystem).
+    const std::string& testResultsPath() const { return testResultsPath_; }
+
 private:
     std::string mudlibRoot_ = "./test/mudlib_stub";
     std::string masterFile_ = "/master";
@@ -115,6 +134,8 @@ private:
     bool sawListenLine_ = false;
     std::string tlsCert_;
     std::string tlsKey_;
+    std::string testResultsPath_;
+    int maxConnections_ = 256;
 
     std::unordered_map<std::string, std::string> raw_;
 

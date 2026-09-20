@@ -162,6 +162,19 @@ bool Server::listen() {
 }
 
 void Server::onNewConnection(int clientFd, const ListenPort& spec) {
+    // src/config/instruct.md Phase 0's own max_connections row. Checked
+    // first, before any Connection is even constructed: connections_
+    // only ever gains an entry at the very end of this function, once
+    // master->connect()/logon() both succeed, so this count is always
+    // the set of already-established connections, never including the
+    // one currently being processed.
+    if (atMaxConnections(connections_.size(), config_.maxConnections())) {
+        std::cerr << "[net] rejecting fd=" << clientFd
+                   << ": at max_connections (" << config_.maxConnections() << ")\n";
+        ::close(clientFd);
+        return;
+    }
+
     int one = 1;
     ::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
@@ -177,10 +190,13 @@ void Server::onNewConnection(int clientFd, const ListenPort& spec) {
     if (spec.kind == ListenKind::WebSocket) {
         conn->enableWebSocket();
     } else {
-        // comm.c new_user(): IAC DO TTYPE then IAC DO NAWS. Also offer GMCP.
+        // comm.c new_user(): IAC DO TTYPE then IAC DO NAWS. Also offer
+        // GMCP and MSSP (option 70/0x46; see Connection::sendMssp()'s
+        // own comment).
         conn->send(std::string("\xff\xfd\x18", 3));
         conn->send(std::string("\xff\xfd\x1f", 3));
         conn->send(std::string("\xff\xfb\xc9", 3));
+        conn->send(std::string("\xff\xfb\x46", 3));
     }
 
     OutputContext::set(conn.get());
@@ -530,6 +546,15 @@ void Server::handleConnection(Connection& conn) {
                        << " gmcp() failed: " << e.what() << "\n";
         }
         OutputContext::set(nullptr);
+    }
+
+    // MSSP: a single static data block, sent once right after the
+    // client accepts this driver's own proactive "IAC WILL MSSP" (see
+    // Connection::sendMssp()'s own comment). No LPC apply involved, so
+    // this does not need OutputContext or a bound object at all.
+    if (conn.takeMsspNegotiated()) {
+        conn.sendMssp(config_.mudName(), static_cast<int>(connectionCount()),
+                      static_cast<int>(std::time(nullptr) - bootTime_));
     }
 
     if (obj && !lines.empty()) {

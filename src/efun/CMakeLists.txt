@@ -8,6 +8,7 @@ add_library(efun
     NetEfuns.cpp
     ParserPackage.cpp
     DbRegistry.cpp
+    TestResultsRegistry.cpp
 )
 target_include_directories(efun PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(efun PRIVATE ${PCRE2_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS} ${LIBCRYPTO_INCLUDE_DIRS})

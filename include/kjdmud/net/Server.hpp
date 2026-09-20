@@ -1,4 +1,5 @@
 #pragma once
+#include <ctime>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +73,15 @@ public:
     // LpcSocket, no live accept loop required.
     static void pollSockets(VM& vm);
 
+    // src/config/instruct.md Phase 0's own max_connections row. Pulled
+    // out as a pure static predicate for the same reason dispatchLine()/
+    // fireNetDeadIfLinkDead()/pollSockets() above are: the actual
+    // accept-or-reject decision is directly testable this way, no live
+    // listening socket required.
+    static bool atMaxConnections(size_t currentCount, int maxConnections) {
+        return currentCount >= static_cast<size_t>(maxConnections);
+    }
+
 private:
     struct Listener {
         int fd = -1;
@@ -90,6 +100,10 @@ private:
     std::vector<Listener> listeners_;
     SSL_CTX* sslCtx_ = nullptr;
     std::vector<std::shared_ptr<Connection>> connections_;
+    // MSSP's own "UPTIME" variable (MsspHandler). Server is constructed
+    // once, early in main(), the same "close enough to real boot time"
+    // granularity uptime()'s own bootTime capture in EfunTable.cpp uses.
+    const std::time_t bootTime_ = std::time(nullptr);
 };
 
 } // namespace kjdmud

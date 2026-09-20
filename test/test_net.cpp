@@ -3,6 +3,7 @@
 #include "kjdmud/net/Connection.hpp"
 #include "kjdmud/net/InteractiveRegistry.hpp"
 #include "kjdmud/net/OutputContext.hpp"
+#include "kjdmud/net/Server.hpp"
 #include "kjdmud/object/ObjectManager.hpp"
 #include "kjdmud/vm/VM.hpp"
 #include "kjdmud/vm/Value.hpp"
@@ -419,6 +420,67 @@ void testGmcpSubnegotiationIsQueued() {
 
 } // namespace
 
+// src/config/instruct.md Phase 0's own max_connections row.
+void testMaxConnectionsConfigKeyDefaultsTo256AndParsesCustomValue() {
+    NetHarness defaultHarness;
+    assert(defaultHarness.config.maxConnections() == 256);
+
+    NetHarness customHarness("max_connections: 3\n");
+    assert(customHarness.config.maxConnections() == 3);
+
+    std::cout << "testMaxConnectionsConfigKeyDefaultsTo256AndParsesCustomValue OK\n";
+}
+
+// Server::onNewConnection() only ever appends to connections_ once a
+// new connection is fully established (see its own comment), so the
+// count passed to atMaxConnections() is always "already-established
+// connections", never including the one currently being processed:
+// exactly at the limit must still reject, not just strictly over it.
+void testAtMaxConnectionsPredicateGatesExactlyAtTheConfiguredLimit() {
+    assert(!kjdmud::Server::atMaxConnections(0, 3));
+    assert(!kjdmud::Server::atMaxConnections(2, 3));
+    assert(kjdmud::Server::atMaxConnections(3, 3));
+    assert(kjdmud::Server::atMaxConnections(4, 3));
+    std::cout << "testAtMaxConnectionsPredicateGatesExactlyAtTheConfiguredLimit OK\n";
+}
+
+// MSSP (telnet option 70): this driver's own proactive "IAC WILL MSSP"
+// (Server::onNewConnection()) plus the client's "IAC DO MSSP" reply is
+// exactly the negotiation shape GMCP already uses; the one-shot flag
+// and the actual data block are what this test covers directly, no
+// live Server/accept loop needed.
+void testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char doMssp[] = {255, 253, 70};
+    assert(::write(fds[1], doMssp, sizeof(doMssp)) == static_cast<ssize_t>(sizeof(doMssp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.takeMsspNegotiated());
+    assert(!conn.takeMsspNegotiated());
+
+    conn.sendMssp("kjdmud", 3, 120);
+    std::string wired = readAvailable(fds[1]);
+    assert(wired.size() > 5);
+    assert(static_cast<unsigned char>(wired[0]) == 255);
+    assert(static_cast<unsigned char>(wired[1]) == 250);
+    assert(static_cast<unsigned char>(wired[2]) == 70);
+    assert(static_cast<unsigned char>(wired[wired.size() - 2]) == 255);
+    assert(static_cast<unsigned char>(wired[wired.size() - 1]) == 240);
+    assert(wired.find("NAME") != std::string::npos);
+    assert(wired.find("kjdmud") != std::string::npos);
+    assert(wired.find("PLAYERS") != std::string::npos);
+    assert(wired.find("UPTIME") != std::string::npos);
+    assert(wired.find("120") != std::string::npos);
+    assert(wired.find("CODEBASE") != std::string::npos);
+
+    ::close(fds[1]);
+    std::cout << "testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock OK\n";
+}
+
 void runNetTests() {
     testListenConfigSynthesizesTelnetFromPort();
     testListenConfigParsesMultipleKindsAndTls();
@@ -430,4 +492,7 @@ void runNetTests() {
     testTlsSocketpairRoundTrip();
     testEncodingAndGmcpEfunsOnASocketpair();
     testGmcpSubnegotiationIsQueued();
+    testMaxConnectionsConfigKeyDefaultsTo256AndParsesCustomValue();
+    testAtMaxConnectionsPredicateGatesExactlyAtTheConfiguredLimit();
+    testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock();
 }

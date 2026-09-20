@@ -80,6 +80,8 @@ bool Config::loadFromFile(const std::string& path) {
         else if (key == "listen") addListenLine(val);
         else if (key == "tls_cert") tlsCert_ = val;
         else if (key == "tls_key") tlsKey_ = val;
+        else if (key == "test_results_path") testResultsPath_ = val;
+        else if (key == "max_connections") maxConnections_ = std::stoi(val);
     }
     ensureDefaultListenPort();
     return true;

@@ -1,5 +1,69 @@
 # STATUS
 
+**2026-09-20: MSSP (src/proto/instruct.md, Phase 3 row).** MUD Server
+Status Protocol, telnet option 70/0x46. `Server::onNewConnection()` now
+sends "IAC WILL MSSP" to every telnet (non-WebSocket) connection
+alongside the existing TTYPE/NAWS/GMCP offers. On the client's "IAC DO
+MSSP" reply, `Connection::handleNegotiation()` sets a new one-shot
+`takeMsspNegotiated()` flag (same shape as `takeWindowSizeUpdate()`/
+`takeTerminalTypeUpdate()`), which `Server::handleConnection()` consumes
+to send the one-time MSSP data block via new `Connection::sendMssp()`:
+NAME, PLAYERS, UPTIME, CODEBASE. No LPC apply or efun involved, matching
+this row's own spec (no MSSP-specific efun is listed anywhere in
+`src/proto/instruct.md`'s "New efuns" section). Public client protocol,
+not tied to any one real LP driver's own C source, so this is not a
+verified port against vendored reference source the way most of this
+project's other work is (none is present on disk for this row either
+way).
+
+Deliberately placed in `src/net/Connection.cpp`, not a new `src/proto`
+`MsspHandler` class as `instruct.md`'s own original sketch described:
+`src/proto` already depends on `src/net` (for `Connection` itself), and
+this is a one-way, `Server`-triggered send with no receiving/parsing
+side, so a `Server`-called `src/proto` class would have been a circular
+library dependency. `GmcpHandler` avoids this the same way in practice:
+its own real send logic already lives in `Connection::sendGmcp()`, not
+in `src/proto` itself. 1 new regression test in `test/test_net.cpp`
+covers the negotiation flag and the exact wire bytes. Suite green (2/2
+tests).
+
+**2026-09-20: max_connections config key (src/config/instruct.md Phase
+0).** New `Config::maxConnections()` (default 256), parsed from a
+`max_connections` config line the same way `max_eval_cost` etc. already
+are. `Server::onNewConnection()` now rejects (closes the fd, never
+reaches `master->connect()`) any new connection once
+`connectionCount()` is already at this value. The check itself is
+pulled out as a small static `Server::atMaxConnections(currentCount,
+maxConnections)` predicate, same reasoning as `dispatchLine()`/
+`fireNetDeadIfLinkDead()`/`pollSockets()`: directly testable without a
+live listening socket, since nothing in this codebase currently
+constructs a full `Server` in a test. No real driver source is present
+on disk (`temp/reference/fluffos-2.9-ds2.08` etc. are not checked out
+right now) to cite an exact MAX_USERS-style rejection behavior against,
+so this is a plain accept-or-close gate, not a verified port of a
+specific reference driver's own over-limit handling. `save_format` and
+`tls_cert`/`tls_key`, the other three rows this same instruct.md Phase
+0 table lists, turned out already obsolete or already done:
+`save_object` (`EfunTable.cpp`) unconditionally writes the real FluffOS
+text format now, no format-switching enum was ever added or needed, and
+`tls_cert`/`tls_key` already exist in `Config`. 2 new regression tests
+in `test/test_net.cpp`. Suite green (2/2 tests).
+
+**2026-09-20: LPC-native test runner (ROADMAP row 2.22).** New efuns
+`assert_equal`, `assert_not_equal`, `assert_throws`, `test_pass`,
+`test_fail`, `run_tests` (`src/efun/EfunTable.cpp`), backed by a new
+`TestResultsRegistry` (`src/efun/TestResultsRegistry.hpp`/`.cpp`).
+`run_tests(object)` calls every `test_*` function declared on the target
+object, including inherited ones, recording a pass or the caught
+`LpcRuntimeError` message per call; `test_pass`/`test_fail` let a test
+function log finer-grained named sub-results directly into the same
+buffer. New `test_results_path` config key (`Config.hpp`/`.cpp`): when
+set, `run_tests` writes the full results buffer to that path as a
+hand-rolled JSON array, no dependency on the still-unimplemented
+`json_encode`/`json_decode` (row 2.17). Driver-added convenience efuns,
+no FluffOS/LDMud/DGD citation for any of the six. 4 new regression tests
+in `test/test_lexer.cpp`. Suite green (2/2 tests).
+
 **2026-09-19: call_stack mode 2 (function names).** `ObjectFrameGuard`
 now pushes/pops a per-frame function name in lockstep with
 `callStack_`. `call_stack(2)` returns those names, current first.

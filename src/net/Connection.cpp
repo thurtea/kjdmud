@@ -29,6 +29,9 @@ constexpr unsigned char kTelOptEcho = 1;
 constexpr unsigned char kTelOptTtype = 24;
 constexpr unsigned char kTelOptNaws = 31;
 constexpr unsigned char kTelOptGmcp = 201;
+// Real client-facing MSSP telnet option code (public MSSP spec, not
+// FluffOS/LDMud/DGD-specific; see MsspHandler.hpp's own comment).
+constexpr unsigned char kTelOptMssp = 70;
 constexpr unsigned char kTelQualIs = 0;
 constexpr unsigned char kTelQualSend = 1;
 
@@ -227,6 +230,34 @@ void Connection::sendGmcp(const std::string& package) {
     send(std::string(reinterpret_cast<char*>(prefix), sizeof(prefix)) +
          package +
          std::string(reinterpret_cast<char*>(suffix), sizeof(suffix)));
+}
+
+namespace {
+// Real MSSP wire constants (public spec): MSSP_VAR/MSSP_VAL are raw
+// bytes 1 and 2, not the ASCII characters '1'/'2'.
+constexpr unsigned char kMsspVar = 1;
+constexpr unsigned char kMsspVal = 2;
+
+void appendMsspVar(std::string& out, const std::string& name, const std::string& value) {
+    out += static_cast<char>(kMsspVar);
+    out += name;
+    out += static_cast<char>(kMsspVal);
+    out += value;
+}
+} // namespace
+
+void Connection::sendMssp(const std::string& mudName, int playerCount, int uptimeSeconds) {
+    std::string out;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSb);
+    out += static_cast<char>(kTelOptMssp);
+    appendMsspVar(out, "NAME", mudName);
+    appendMsspVar(out, "PLAYERS", std::to_string(playerCount));
+    appendMsspVar(out, "UPTIME", std::to_string(uptimeSeconds));
+    appendMsspVar(out, "CODEBASE", "kjdmud");
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSe);
+    send(out);
 }
 
 std::string Connection::encodeWsFrame(const std::string& payload) const {
@@ -548,6 +579,10 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
         if (option == kTelOptEcho) return;
         if (option == kTelOptGmcp) {
             gmcpEnabled_ = true;
+            return;
+        }
+        if (option == kTelOptMssp) {
+            msspNegotiated_ = true;
             return;
         }
         unsigned char resp[] = {kIac, kWont, option};

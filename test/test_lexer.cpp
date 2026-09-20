@@ -13,6 +13,7 @@
 #include "kjdmud/efun/EfunTable.hpp"
 #include "kjdmud/efun/ParserPackage.hpp"
 #include "kjdmud/efun/DbRegistry.hpp"
+#include "kjdmud/efun/TestResultsRegistry.hpp"
 #include "kjdmud/core/Errors.hpp"
 #include "kjdmud/net/Connection.hpp"
 #include "kjdmud/net/OutputContext.hpp"
@@ -31672,6 +31673,138 @@ static void testCallArgsStaySeparateWhileParenthesizedCommaExprIsOneArg() {
     std::cout << "testCallArgsStaySeparateWhileParenthesizedCommaExprIsOneArg OK\n";
 }
 
+// ROADMAP.md row 2.22: LPC-native test runner efuns (assert_equal,
+// assert_not_equal, assert_throws, test_pass, test_fail, run_tests).
+// Driver-added, no real FluffOS/LDMud/DGD citation. See
+// TestResultsRegistry.hpp for the shared buffer these exercise.
+
+static void testAssertEqualPassesOnEqualAndThrowsWithBothValuesOnMismatch() {
+    kjdmud::Value okResult = runProbeMulti(
+        "int probe() {\n"
+        "    assert_equal(1, 1);\n"
+        "    assert_equal(\"x\", \"x\");\n"
+        "    return 1;\n"
+        "}\n");
+    assert(std::holds_alternative<int64_t>(okResult.data));
+    assert(std::get<int64_t>(okResult.data) == 1);
+
+    bool threw = false;
+    std::string message;
+    try {
+        runProbeMulti(
+            "int probe() {\n"
+            "    assert_equal(1, 2);\n"
+            "    return 1;\n"
+            "}\n");
+    } catch (const kjdmud::LpcRuntimeError& e) {
+        threw = true;
+        message = e.what();
+    }
+    assert(threw);
+    assert(message.find("1") != std::string::npos && message.find("2") != std::string::npos);
+
+    std::cout << "testAssertEqualPassesOnEqualAndThrowsWithBothValuesOnMismatch OK\n";
+}
+
+static void testAssertNotEqualPassesOnDifferentAndThrowsOnMatch() {
+    kjdmud::Value okResult = runProbeMulti(
+        "int probe() {\n"
+        "    assert_not_equal(1, 2);\n"
+        "    return 1;\n"
+        "}\n");
+    assert(std::holds_alternative<int64_t>(okResult.data));
+    assert(std::get<int64_t>(okResult.data) == 1);
+
+    bool threw = false;
+    try {
+        runProbeMulti(
+            "int probe() {\n"
+            "    assert_not_equal(5, 5);\n"
+            "    return 1;\n"
+            "}\n");
+    } catch (const kjdmud::LpcRuntimeError&) {
+        threw = true;
+    }
+    assert(threw);
+
+    std::cout << "testAssertNotEqualPassesOnDifferentAndThrowsOnMatch OK\n";
+}
+
+static void testAssertThrowsReturnsCaughtMessageAndThrowsIfCallbackDoesNotThrow() {
+    kjdmud::Value result = runProbeMulti(
+        "void boom() { assert_equal(1, 2); }\n"
+        "string probe() {\n"
+        "    return assert_throws((: boom :));\n"
+        "}\n");
+    assert(std::holds_alternative<std::string>(result.data));
+    assert(std::get<std::string>(result.data).find("1") != std::string::npos);
+
+    bool threw = false;
+    try {
+        runProbeMulti(
+            "void quiet() { }\n"
+            "string probe() {\n"
+            "    return assert_throws((: quiet :));\n"
+            "}\n");
+    } catch (const kjdmud::LpcRuntimeError& e) {
+        threw = true;
+        assert(std::string(e.what()).find("did not throw") != std::string::npos);
+    }
+    assert(threw);
+
+    std::cout << "testAssertThrowsReturnsCaughtMessageAndThrowsIfCallbackDoesNotThrow OK\n";
+}
+
+static void testRunTestsExecutesTestPrefixedFunctionsAndWritesJsonResults() {
+    char resultsDirTemplate[] = "/tmp/kjdmud_test_results_XXXXXX";
+    char* resultsDir = mkdtemp(resultsDirTemplate);
+    assert(resultsDir != nullptr);
+    std::string resultsPath = std::string(resultsDir) + "/results.json";
+
+    ObjectVarHarness harness("test_results_path: " + resultsPath + "\n");
+    harness.writeFile("/test_target.c",
+        "void test_alpha() { assert_equal(1, 1); }\n"
+        "void test_beta() { assert_equal(1, 2); }\n"
+        "void test_gamma() {\n"
+        "    test_pass(\"manual_pass\");\n"
+        "    test_fail(\"manual_fail\", \"custom reason\");\n"
+        "}\n"
+        "int not_a_test() { return 1; }\n"
+        "int run_self() { return run_tests(this_object()); }\n");
+    auto ob = harness.objects.cloneObject("/test_target");
+    assert(ob != nullptr);
+
+    // Only test_alpha/test_beta/test_gamma start with "test_"; not_a_test
+    // and run_self itself must not be picked up.
+    kjdmud::Value countResult = harness.vm.callFunction(ob, "run_self", {});
+    assert(std::holds_alternative<int64_t>(countResult.data));
+    assert(std::get<int64_t>(countResult.data) == 3);
+
+    const auto& entries = kjdmud::TestResultsRegistry::entries();
+    assert(entries.size() == 5);
+    assert(entries[0].name == "test_alpha" && entries[0].passed);
+    assert(entries[1].name == "test_beta" && !entries[1].passed);
+    assert(entries[1].message.find("assert_equal") != std::string::npos);
+    // test_gamma's own manual test_pass()/test_fail() calls land in the
+    // buffer before run_tests()'s own record of test_gamma itself
+    // (which only appends once the call to test_gamma returns).
+    assert(entries[2].name == "manual_pass" && entries[2].passed);
+    assert(entries[3].name == "manual_fail" && !entries[3].passed);
+    assert(entries[3].message == "custom reason");
+    assert(entries[4].name == "test_gamma" && entries[4].passed);
+
+    std::ifstream jsonFile(resultsPath);
+    assert(jsonFile.good());
+    std::stringstream buf;
+    buf << jsonFile.rdbuf();
+    std::string jsonText = buf.str();
+    assert(jsonText.find("\"test_alpha\"") != std::string::npos);
+    assert(jsonText.find("\"passed\":false") != std::string::npos);
+    assert(jsonText.find("custom reason") != std::string::npos);
+
+    std::cout << "testRunTestsExecutesTestPrefixedFunctionsAndWritesJsonResults OK\n";
+}
+
 void runNetTests();
 
 int main() {
@@ -32635,6 +32768,10 @@ int main() {
     testIndexedPlainArrayElementMemberAccessStillThrows();
     testReturnCommaExprYieldsRightmostValueAfterAssignmentSideEffect();
     testCallArgsStaySeparateWhileParenthesizedCommaExprIsOneArg();
+    testAssertEqualPassesOnEqualAndThrowsWithBothValuesOnMismatch();
+    testAssertNotEqualPassesOnDifferentAndThrowsOnMatch();
+    testAssertThrowsReturnsCaughtMessageAndThrowsIfCallbackDoesNotThrow();
+    testRunTestsExecutesTestPrefixedFunctionsAndWritesJsonResults();
     runNetTests();
     std::cout << "all tests passed\n";
     return 0;
