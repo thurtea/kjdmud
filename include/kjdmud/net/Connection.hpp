@@ -150,6 +150,91 @@ public:
     bool mxpEnabled() const { return mxpEnabled_; }
     void setMxpEnabled(bool enabled) { mxpEnabled_ = enabled; }
 
+    // Mud Sound Protocol (telnet option 90/0x5A). Unlike GMCP/MSDP/MSSP/
+    // MXP above, this one *is* verified against real, current FluffOS
+    // driver source (github.com/fluffos/fluffos, cloned fresh for this
+    // row since this repo's own vendored temp/ is absent on this
+    // machine): src/net/msp.cc's own on_telnet_do_msp() sets a USING_MSP
+    // flag and fires "safe_apply(APPLY_MSP_ENABLE, ip->ob, 0,
+    // ORIGIN_DRIVER)" (src/vm/internal/applies: "MSP_ENABLE" with no
+    // ":override", so the real LPC-side name is the lowercased
+    // "msp_enable") every time negotiation completes, from either
+    // direction (src/net/telnet.cc's on_telnet_do()/my_telopts[] both
+    // list MSP the same WILL/DO-symmetric way GMCP/MSDP/MSSP/ZMP already
+    // are, so a client-volunteered "IAC WILL MSP" and a reply to this
+    // driver's own proactive offer both reach that one function). No
+    // efun here fires that apply directly (real code does not either);
+    // the one-shot flag below lets Server::handleConnection() fire it,
+    // the same "needs VM access this class deliberately does not have"
+    // shape takeMsspNegotiated() above already uses.
+    bool mspEnabled() const { return mspEnabled_; }
+    bool takeMspEnableNegotiated() {
+        bool had = mspEnableNegotiated_;
+        mspEnableNegotiated_ = false;
+        return had;
+    }
+
+    // Real telnet_send_msp_oob() (src/net/msp.cc): passthrough of an
+    // already-composed MSP trigger string (e.g. "!!SOUND(bang.wav
+    // V=50)"; the driver imposes no *trigger-grammar* structure on it,
+    // matching real code exactly - see the .cpp's own comment for the
+    // one thing that is not a raw byte-for-byte passthrough, IAC
+    // escaping) as the option-90 subnegotiation payload, silently doing
+    // nothing if MSP was never negotiated (real code's own "if (ip->
+    // iflags & USING_MSP)" guard). v1 scope stops at this raw
+    // passthrough, same as real FluffOS itself: MSP's actual "!!SOUND(...)"/
+    // "!!MUSIC(...)" trigger grammar is composed mudlib-side there too
+    // (dwlib.spec-style helper functions, not driver code), so there is
+    // no real driver-side trigger-builder to port here either.
+    void sendMspOob(const std::string& payload);
+
+    // Zenith MUD Protocol (telnet option 93/0x5D). Verified against
+    // current FluffOS source (github.com/fluffos/fluffos, this
+    // machine's own temp/ still absent; see docs/dev/ROADMAP.md's own
+    // "Verification note"), same as MSP: real src/net/telnet.cc's
+    // on_telnet_do()/on_telnet_negotiate() treat option 93 with the
+    // same WILL/DO-symmetric shape GMCP/MSDP/MSSP/MSP already are, so
+    // this follows GMCP/MSDP's plain-enabled-flag-plus-queued-incoming
+    // shape, not MSP's one-shot-apply-on-enable shape: real
+    // on_telnet_do()'s own ZMP case ("ip->iflags |= USING_ZMP; break;")
+    // fires no apply at all on negotiation, confirmed directly against
+    // src/vm/internal/applies (only a bare "ZMP:zmp_command" entry for
+    // the incoming-message apply exists there; no "ZMP_ENABLE" entry the
+    // way "MSP_ENABLE"/"GMCP_ENABLE"/"MSDP_ENABLE" all do - the latter
+    // two of which this driver's own already-shipped GMCP/MSDP rows
+    // never fire either, a separate pre-existing gap flagged in
+    // docs/dev/STATUS.md, not fixed here). Real on_telnet_dont() has no
+    // ZMP case either (falls to the generic "log only, no action"
+    // default), so no special DONT/WONT handling is added here.
+    bool zmpEnabled() const { return zmpEnabled_; }
+
+    // Real wire framing, confirmed directly against src/thirdparty/
+    // libtelnet/libtelnet.c's telnet_send_zmp()/telnet_zmp_arg()/
+    // _zmp_telnet(): "IAC SB ZMP <command>\0<arg1>\0<arg2>\0...\0 IAC
+    // SE" - every field, the command included, is NUL-terminated on the
+    // wire (telnet_zmp_arg() sends strlen(arg)+1 bytes), and the real
+    // receiver rejects a buffer not ending in \0 as an incomplete
+    // frame. Each field goes through the same IAC-doubling telnet_send()
+    // already relied on for sendMspOob() above (see that method's own
+    // .cpp comment); embedded NUL bytes need no escaping of their own,
+    // telnet has no special meaning for 0x00.
+    void sendZmp(const std::string& command, const std::vector<std::string>& args);
+
+    // Real safe_apply(APPLY_ZMP, ip->ob, 2, ORIGIN_DRIVER) (src/net/
+    // telnet.cc's on_telnet_do_zmp(argv, argc, ip)) fires once per
+    // incoming ZMP message, pushing argv[0] (the command) and an array
+    // of argv[1..argc-1] (the remaining arguments, always strings in
+    // real code) as the apply's two arguments. Queued the same
+    // one-entry-per-message shape incomingGmcp_/incomingMsdp_ above
+    // already use, drained by Server::handleConnection() into the real
+    // mapped LPC name "zmp_command" (src/vm/internal/applies:
+    // "ZMP:zmp_command"), not a bare "zmp".
+    std::vector<std::pair<std::string, std::vector<std::string>>> takeIncomingZmp() {
+        std::vector<std::pair<std::string, std::vector<std::string>>> out = std::move(incomingZmp_);
+        incomingZmp_.clear();
+        return out;
+    }
+
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
@@ -370,6 +455,10 @@ private:
     bool msdpEnabled_ = false;
     std::vector<std::pair<std::string, std::string>> incomingMsdp_;
     bool mxpEnabled_ = false;
+    bool mspEnabled_ = false;
+    bool mspEnableNegotiated_ = false;
+    bool zmpEnabled_ = false;
+    std::vector<std::pair<std::string, std::vector<std::string>>> incomingZmp_;
     std::string inputBuffer_;
     std::shared_ptr<LpcObject> boundObject_;
     bool closed_ = false;

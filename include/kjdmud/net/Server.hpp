@@ -82,6 +82,35 @@ public:
         return currentCount >= static_cast<size_t>(maxConnections);
     }
 
+    // Real "safe_apply(APPLY_MSP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+    // (src/net/msp.cc's own on_telnet_do_msp(), confirmed against
+    // current FluffOS source; see Connection.hpp's own mspEnabled()
+    // comment), fired once MSP negotiation completes. Pulled out static
+    // and public for the same reason dispatchLine()/
+    // fireNetDeadIfLinkDead()/pollSockets() above are: a regression test
+    // can drive it directly over a socketpair-backed Connection plus a
+    // VM, no live accept loop required. A no-op if the one-shot flag
+    // was not actually just set, or the connection has no bound object
+    // yet (matches every other apply-dispatch site in handleConnection()
+    // itself, which all skip firing when !obj).
+    static void fireMspEnableIfNegotiated(VM& vm, Connection& conn);
+
+    // Real "safe_apply(APPLY_ZMP, ip->ob, 2, ORIGIN_DRIVER)" (src/net/
+    // telnet.cc's own on_telnet_do_zmp(), confirmed against current
+    // FluffOS source; see Connection.hpp's own takeIncomingZmp()
+    // comment), mapped to LPC-visible "zmp_command". Drains every
+    // queued incoming ZMP message and fires one apply call per message,
+    // same shape as the gmcp()/msdp() incoming loops in
+    // handleConnection() itself (which stay inline there, unlike this
+    // one - pulled out static and public for the same
+    // directly-testable-without-a-live-accept-loop reason
+    // fireMspEnableIfNegotiated() above is, since this row's own test
+    // coverage needs it and the other two rows' inline loops do not
+    // have an equivalent seam yet). A no-op per queued message if the
+    // connection has no bound object (matches every other apply-
+    // dispatch site in handleConnection()).
+    static void dispatchIncomingZmp(VM& vm, Connection& conn);
+
 private:
     struct Listener {
         int fd = -1;

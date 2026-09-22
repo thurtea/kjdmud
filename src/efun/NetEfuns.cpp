@@ -8,6 +8,7 @@
 #include "kjdmud/proto/GmcpHandler.hpp"
 #include "kjdmud/proto/MsdpHandler.hpp"
 #include "kjdmud/proto/MxpHandler.hpp"
+#include "kjdmud/proto/ZmpHandler.hpp"
 #include "kjdmud/core/Errors.hpp"
 #include <vector>
 
@@ -124,6 +125,71 @@ void registerNetEfuns() {
         if (!conn) return Value{};
         MsdpHandler::send(*conn, std::get<std::string>(args[0].data),
                            std::get<std::string>(args[1].data));
+        return Value{};
+    });
+
+    // Real efun names/signatures, confirmed against current FluffOS
+    // src/packages/core/core.spec: "int has_msp(object default:
+    // F__THIS_OBJECT);" and "void telnet_msp_oob(string);" - unlike
+    // has_gmcp/send_gmcp/has_msdp/send_msdp/has_mxp/mxp_*, no naming
+    // deviation here: this row's own verification pass found the real
+    // names, so they are used verbatim rather than the has_X/send_X
+    // convention this driver invented for the earlier rows when no
+    // verified real name was available.
+    t.registerEfun("has_msp", [](VM& vm, std::vector<Value>& args) -> Value {
+        Connection* conn = connectionFor(vm, args);
+        return Value(static_cast<int64_t>(conn && conn->mspEnabled() ? 1 : 0));
+    });
+
+    t.registerEfun("telnet_msp_oob", [](VM& vm, std::vector<Value>& args) -> Value {
+        if (args.empty() || !std::holds_alternative<std::string>(args[0].data)) {
+            throw LpcRuntimeError("telnet_msp_oob: expected a string argument");
+        }
+        // Real f_telnet_msp_oob() reads current_object->interactive, not
+        // command_giver: this efun is meant to be called by a user
+        // object about itself, unlike send_gmcp/send_msdp above which
+        // read command_giver first. Matched here via currentObject()
+        // ahead of the command_giver fallback the others use.
+        auto ob = vm.currentObject();
+        if (!ob) ob = vm.commandGiver();
+        Connection* conn = ob ? InteractiveRegistry::find(ob) : nullptr;
+        if (!conn) return Value{};
+        conn->sendMspOob(std::get<std::string>(args[0].data));
+        return Value{};
+    });
+
+    // Real efun names/signatures, confirmed against current FluffOS
+    // src/packages/core/core.spec: "int has_zmp(object default:
+    // F__THIS_OBJECT);" and "void send_zmp(string, string *);" - same
+    // "use the verified real name verbatim" precedent MSP's own row set
+    // (see has_msp/telnet_msp_oob's own comment above).
+    t.registerEfun("has_zmp", [](VM& vm, std::vector<Value>& args) -> Value {
+        Connection* conn = connectionFor(vm, args);
+        return Value(static_cast<int64_t>(conn && conn->zmpEnabled() ? 1 : 0));
+    });
+
+    t.registerEfun("send_zmp", [](VM& vm, std::vector<Value>& args) -> Value {
+        if (args.size() < 2 || !std::holds_alternative<std::string>(args[0].data) ||
+            !std::holds_alternative<std::shared_ptr<Array>>(args[1].data)) {
+            throw LpcRuntimeError("send_zmp: expected (string, string *)");
+        }
+        // Real f_send_zmp() reads command_giver->interactive, not
+        // current_object (the opposite of telnet_msp_oob() just above -
+        // confirmed directly, not assumed from that precedent).
+        auto ob = vm.commandGiver();
+        if (!ob) ob = vm.currentObject();
+        Connection* conn = ob ? InteractiveRegistry::find(ob) : nullptr;
+        if (!conn) return Value{};
+        // Real f_send_zmp() silently skips any non-string array element
+        // rather than erroring ("if (sp->u.arr->item[i].type ==
+        // T_STRING)"), confirmed directly.
+        std::vector<std::string> zmpArgs;
+        for (const auto& item : std::get<std::shared_ptr<Array>>(args[1].data)->items) {
+            if (std::holds_alternative<std::string>(item.data)) {
+                zmpArgs.push_back(std::get<std::string>(item.data));
+            }
+        }
+        ZmpHandler::send(*conn, std::get<std::string>(args[0].data), zmpArgs);
         return Value{};
     });
 

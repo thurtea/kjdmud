@@ -1,5 +1,214 @@
 # STATUS
 
+**2026-09-22: ZMP (docs/COMPARISON.md 2.32d).** Zenith MUD Protocol,
+telnet option 93/0x5D. Re-cloned upstream FluffOS fresh (this machine's
+own `temp/` still absent; per `docs/dev/ROADMAP.md`'s own "Verification
+note") and re-verified from scratch rather than trusting the prior
+session's own summary, per this row's own explicit instruction - one
+correction surfaced immediately: `src/vm/internal/applies` maps `ZMP`
+to the real LPC name `zmp_command`, not a bare `zmp` as the earlier
+summary assumed without checking that file directly.
+
+Confirmed genuinely driver-native and a real gap (not mudlib-side, the
+MTTS-style trap this row was explicitly asked to check for): real
+`on_telnet_do()`'s own ZMP case (`src/net/telnet.cc`) sets `USING_ZMP`
+and nothing else - no apply fires on negotiation, unlike MSP's
+`MSP_ENABLE`, confirmed directly by grepping `src/vm/internal/applies`
+for a `ZMP_ENABLE` entry and finding none. So `Connection::zmpEnabled()`
+follows GMCP/MSDP's plain-flag-plus-queued-incoming shape, not MSP's
+one-shot-apply shape: no `Server`-level enable-dispatch method needed
+for ZMP the way `fireMspEnableIfNegotiated()` was for MSP. Real
+`on_telnet_dont()` has no ZMP case either (falls to the generic
+log-only default), so no DONT/WONT handling was added, matching real
+behavior rather than inventing one.
+
+Wire framing verified directly against `src/thirdparty/libtelnet/
+libtelnet.c`'s `telnet_send_zmp()`/`telnet_zmp_arg()`/`_zmp_telnet()`:
+`IAC SB ZMP <command>\0<arg1>\0<arg2>\0...\0 IAC SE`, every field
+(command included) IAC-escaped (the same `appendIacEscaped()` helper
+MSP's own escaping fix now shares, factored out this row rather than a
+second copy-paste) then NUL-terminated; the real receiver rejects a
+payload not ending in NUL as an incomplete frame and fires no event at
+all - matched exactly in `handleSubnegotiation()`'s own new ZMP branch,
+confirmed by a dedicated malformed-frame regression test. Real
+`f_send_zmp()` (`telnet_ext.cc`) has no `USING_ZMP` guard on the
+*outgoing* side at all (unlike MSP's own real `USING_MSP` guard) -
+matched deliberately, not overlooked, with its own regression test
+proving `send_zmp`/`sendZmp()` still produce real wire bytes before
+negotiation.
+
+New `src/proto/ZmpHandler` (thin wrapper, mirrors GmcpHandler/
+MsdpHandler - ZMP has a genuine receiving side, unlike MSP/MSSP). New
+efuns with verified real names/signatures: `has_zmp(void|object)`
+(mirrors `has_gmcp`/`has_msdp`/`has_msp`'s optional-object shape) and
+`send_zmp(string, string*)` - confirmed to read `command_giver`, not
+`current_object` the way `telnet_msp_oob` does (a real, verified
+difference between the two rows, not an inconsistency), and confirmed
+to silently skip non-string array elements rather than erroring,
+matched exactly. New `Server::dispatchIncomingZmp(VM&, Connection&)`,
+pulled out static for the same reason `fireMspEnableIfNegotiated()` was
+- this row's own apply-dispatch test needed a seam GMCP's/MSDP's own
+still-inline incoming loops do not have yet (deliberately not touched
+here, out of this row's scope).
+
+8 new regression tests in `test/test_net.cpp`, covering negotiation
+(both directions), wire framing and escaping, inbound parsing (a normal
+multi-arg message, a no-args message, and a malformed non-NUL-terminated
+frame), the efuns (real signatures, non-string filtering), and the
+`zmp_command` apply dispatch (including a no-refire check on a second
+drain). Two real bugs in the tests themselves caught and fixed before
+landing, both from imprecise manual byte-counting of C string literals
+with embedded NULs: a missing trailing `\n` on one inbound-parsing test
+(`pollLines()` needs a line terminator to report a "line" at all, even
+an empty one - copied from the negotiation-test pattern but missed on
+this one), and an off-by-one length passed to `std::string(literal, N)`
+on another (a string literal's own compiler-appended terminator is easy
+to double-count against one's own embedded `\0`; every such length in
+this row's tests was then re-verified with a small Python script rather
+than by further hand-counting). Full clean rebuild from scratch (exit
+0), `ctest` 2/2 green, and a live boot where a real telnet client saw
+`IAC WILL ZMP` offered on connect, a real `IAC DO ZMP` reply produced no
+crash and no client-visible response (matching verified real semantics:
+no enable-apply exists for ZMP to fire), and a real well-formed inbound
+ZMP message (`IAC SB 93 "zmp.ping\0arg1\0" IAC SE`) was parsed without
+crash and produced no client-visible response either (the driver's own
+bundled login object has no `zmp_command()` defined, matching
+`VM::callFunction`'s already-established silent-no-op-on-missing-
+function behavior, not new to this row).
+
+**Two separate findings from this same verification pass, not fixed
+here - flagged for a future row:**
+- Real `GMCP`/`MSDP` also each have their own real `GMCP_ENABLE`/
+  `MSDP_ENABLE` applies (`src/vm/internal/applies`), confirmed directly
+  in the same pass that found `ZMP_ENABLE` does *not* exist. This
+  repo's own already-shipped `gmcp()`/`msdp()` handling never fires
+  either enable-apply - a real, verified gap in code that predates this
+  session, parallel to (but distinct from) the `sendMssp()`/`sendMsdp()`/
+  `sendGmcp()` IAC-escaping gap already flagged under MSP's own entry
+  below.
+- `docs/COMPARISON.md` row 2.32's own original text guessed MSP/ZMP
+  were "not in `src/proto/instruct.md`'s own protocol set" and left it
+  at that; both turned out to be real driver-native FluffOS mechanisms
+  once actually checked, not merely absent from that one file's own
+  scope decision. The lesson already written into
+  `docs/dev/ROADMAP.md`'s "Verification note" this session covers this
+  case too: an absence in one repo's own planning document is not
+  evidence of absence in the real driver.
+
+**2026-09-22: MSP (docs/COMPARISON.md 2.32c), and a verification-tooling
+note.** `src/proto/instruct.md`'s own protocol table is now fully closed
+(GMCP/MSDP/MSSP/MXP landed, MTTS confirmed already driver-complete), so
+this row is not from that table: it is `docs/COMPARISON.md` row 2.32's
+own leftover "MSP/ZMP ... not in src/proto/instruct.md's own protocol
+set" note, picked up because it is the next protocol-shaped Open row in
+this repo's actual backlog and, unlike that leftover note's original
+guess, MSP genuinely is native, driver-side FluffOS work.
+
+This machine's `temp/` is absent (as it has been all session), but this
+row needed the real thing to check MTTS-style false assumptions before
+writing driver code, not just citing the absence and moving on: this
+session cloned current upstream FluffOS fresh from
+github.com/fluffos/fluffos (network access confirmed available in this
+environment; deleted again after use, not vendored into this repo) and
+grepped it directly. That search corrects something STATUS.md has
+asserted three times now (MSSP/MSDP/MXP's own entries below): GMCP,
+MSDP, MSSP, MSP, and ZMP are all real, native, driver-side mechanisms in
+current FluffOS (`src/net/telnet.cc`, `src/net/msp.cc`,
+`src/packages/core/mssp.cc`), each with its own real telnet option code,
+negotiation, and efuns - not the "public protocol, not tied to any one
+real LP driver's own C source" this repo assumed by necessity when
+`temp/` was unavailable and no other source was checked. MXP's own
+"not tied to any one real LP driver" line is the one of the four that
+holds up: current FluffOS has no native MXP support at all, confirmed
+by the same search (only `packages/dwlib/dwlib.cc`'s unrelated
+`replace_mxp()` escaping efun matches "mxp" anywhere in that source
+tree). This does not change what already shipped for GMCP/MSDP/MSSP -
+their wire formats are public-spec-correct regardless, and retrofitting
+them against real FluffOS signatures (which may differ from this
+repo's own already-shipped, already-tested efun names) is a separate,
+deliberately unstarted row, not assumed done here.
+
+MSP itself (telnet option 90/0x5A): `Connection::mspEnabled()` and
+`sendMspOob()`, negotiated the same two-branch Will/Do shape MSDP/MXP
+already use, plus a new one-shot `takeMspEnableNegotiated()` flag - the
+first of the five protocol rows where real source shows a driver
+actually needs one: `on_telnet_do_msp()` (`src/net/msp.cc`) fires
+`safe_apply(APPLY_MSP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)` every time
+negotiation completes, mapped LPC-side to plain `msp_enable()`
+(`src/vm/internal/applies`: "MSP_ENABLE" with no override). That apply
+needs VM access `Connection` deliberately does not have, so it is fired
+from `Server`, pulled out as a new public static
+`Server::fireMspEnableIfNegotiated(VM&, Connection&)` rather than
+inlined in the private `handleConnection()` - matching this file's own
+existing `dispatchLine()`/`fireNetDeadIfLinkDead()`/`pollSockets()`
+convention (`net/instruct.md`'s own stated "Key invariants") of pulling
+out anything that needs direct unit-test coverage as its own static,
+Server-instance-free seam. `sendMspOob(payload)` is a raw passthrough
+of an already-composed MSP trigger string (real code imposes no
+structure on it either; the actual `!!SOUND(...)`/`!!MUSIC(...)`
+grammar is mudlib-side in real FluffOS too), silently doing nothing if
+MSP was never negotiated, matching real `telnet_send_msp_oob()`'s own
+`USING_MSP` guard exactly. New efuns use the *real* verified names
+verbatim (`has_msp`, `telnet_msp_oob`, from `core.spec`) rather than
+this repo's own `has_X`/`send_X` convention invented for GMCP/MSDP/MXP
+when no real name was available - the one place this row's naming
+differs from the last several.
+
+3 new regression tests in `test/test_net.cpp`, including this repo's
+first test to exercise `Server`'s own apply-dispatch logic directly
+(every prior GMCP/MSDP/MSSP/MXP row only unit-tested `Connection`'s
+wire-level state, leaving apply dispatch to live-boot checking, since
+nothing before MSP fired an apply on simple negotiation). One test
+regression caught and fixed in the same session: the first draft of the
+new efun-wiring test called `conn.pollLines()` without
+`setNonBlocking(fds[0])` first (missed copying that from the
+negotiation-test pattern, only the efun-test pattern, which never calls
+`pollLines()` itself) and hung the whole suite for 143s before being
+killed manually; fixed once caught, verified with a hard-timeout rerun
+after. Full clean rebuild from scratch (exit 0), `ctest` 2/2 green, and
+a live boot where a real telnet client saw all five of GMCP/MSSP/MSDP/
+MXP/MSP offered on connect and a real "IAC DO MSP" reply produced no
+crash and no client-visible response (matching real semantics exactly:
+the apply fires silently, and the driver's own bundled login object has
+no `msp_enable()` defined, which is expected and not an error per
+`VM::callFunction`'s already-existing missing-function-is-a-silent-noop
+behavior, not new to this row).
+
+**2026-09-22 review pass (same day, before commit):** re-reviewed this
+row's own staged diff before it was ever committed. Found and fixed one
+real defect: `sendMspOob()` appended the mudlib-supplied payload
+verbatim, but real `telnet_send()` (`src/thirdparty/libtelnet/
+libtelnet.c`, confirmed directly - the function real `telnet_
+subnegotiation()` actually calls for the payload portion, re-checked
+against a fresh upstream clone since this repo's own `temp/` is still
+absent) doubles any literal IAC (0xFF) byte in the payload before
+writing it to the wire; skipping that is a real, reachable framing bug
+specifically for MSP (unlike `sendMssp()`/`sendMsdp()`/`sendGmcp()`
+elsewhere in this file, whose payloads are driver-composed ASCII
+unlikely to ever contain 0xFF in practice, `telnet_msp_oob(string)`
+takes fully arbitrary mudlib content by design). Fixed to match real
+`telnet_send()`'s own doubling exactly; the other three `sendX()`
+methods keep the same gap and are not touched here - a real, separate,
+pre-existing finding for a future row, not assumed fixed by osmosis.
+New regression test asserts the doubled-byte wire output directly.
+Also strengthened the existing apply-dispatch test: `enabled` was a
+flag set unconditionally to 1 on every `msp_enable()` call, so a second
+`fireMspEnableIfNegotiated()` call re-setting it to 1 was
+indistinguishable from a real double-fire in that one test's own
+assertions (the one-shot flag itself was still correctly proven
+separately in `testMspDoReplySetsEnabledFlagsOnce`, so this was a test
+robustness gap, not a demonstrated driver bug); changed to an
+incrementing counter so the same test now directly proves no double-
+fire through the real dispatch path. Also corrected this file's own
+"4 new regression tests" line above to the real count, 3 - test
+function count, not edit count, was miscounted when first written.
+Re-verified after both fixes: clean rebuild from scratch (exit 0),
+`ctest` 2/2 green (~50s this pass, up from the usual ~35s; traced to an
+unrelated background process on this machine consuming ~650% CPU
+during the run, confirmed via `ps`, not a regression in the suite
+itself), and a repeat live boot confirming the fix did not change
+observable wire behavior for the already-covered cases.
+
 **2026-09-22: MXP (src/proto/instruct.md Phase 3 row, docs/COMPARISON.md
 2.32b), and MTTS correction (2.32).** MUD eXtension Protocol, telnet
 option 91/0x5B. Negotiation only (`Connection::mxpEnabled()`, same

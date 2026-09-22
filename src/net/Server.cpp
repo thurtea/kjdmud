@@ -193,14 +193,23 @@ void Server::onNewConnection(int clientFd, const ListenPort& spec) {
         // comm.c new_user(): IAC DO TTYPE then IAC DO NAWS. Also offer
         // GMCP, MSSP (option 70/0x46; see Connection::sendMssp()'s own
         // comment), MSDP (option 69/0x45; see Connection::sendMsdp()'s
-        // own comment), and MXP (option 91/0x5B; see Connection's own
-        // mxpEnabled() comment).
+        // own comment), MXP (option 91/0x5B; see Connection's own
+        // mxpEnabled() comment), MSP (option 90/0x5A; see Connection's
+        // own mspEnabled() comment), and ZMP (option 93/0x5D; see
+        // Connection's own zmpEnabled() comment). Real FluffOS's own
+        // new_user()-equivalent (src/net/telnet.cc) proactively offers
+        // this exact same set (GMCP/MSDP/ZMP/MSSP/MSP, gated per-option
+        // by its own config flags there; this driver offers all of them
+        // unconditionally, an already-established simplification carried
+        // from GMCP/MSDP/MSSP/MXP, not new to MSP/ZMP).
         conn->send(std::string("\xff\xfd\x18", 3));
         conn->send(std::string("\xff\xfd\x1f", 3));
         conn->send(std::string("\xff\xfb\xc9", 3));
         conn->send(std::string("\xff\xfb\x46", 3));
         conn->send(std::string("\xff\xfb\x45", 3));
         conn->send(std::string("\xff\xfb\x5b", 3));
+        conn->send(std::string("\xff\xfb\x5a", 3));
+        conn->send(std::string("\xff\xfb\x5d", 3));
     }
 
     OutputContext::set(conn.get());
@@ -365,6 +374,40 @@ void Server::fireNetDeadIfLinkDead(VM& vm, Connection& conn) {
     OutputContext::set(nullptr);
 }
 
+void Server::fireMspEnableIfNegotiated(VM& vm, Connection& conn) {
+    if (!conn.takeMspEnableNegotiated()) return;
+    auto obj = conn.boundObject();
+    if (!obj) return;
+
+    OutputContext::set(&conn);
+    try {
+        vm.callFunction(obj, "msp_enable", {});
+    } catch (const std::exception& e) {
+        std::cerr << "[net] connection fd=" << conn.fd()
+                   << " msp_enable() failed: " << e.what() << "\n";
+    }
+    OutputContext::set(nullptr);
+}
+
+void Server::dispatchIncomingZmp(VM& vm, Connection& conn) {
+    auto obj = conn.boundObject();
+    for (const auto& [command, args] : conn.takeIncomingZmp()) {
+        if (!obj) break;
+        auto argsArray = std::make_shared<Array>();
+        for (const auto& arg : args) {
+            argsArray->items.emplace_back(arg);
+        }
+        OutputContext::set(&conn);
+        try {
+            vm.callFunction(obj, "zmp_command", {Value(command), Value(argsArray)});
+        } catch (const std::exception& e) {
+            std::cerr << "[net] connection fd=" << conn.fd()
+                       << " zmp_command() failed: " << e.what() << "\n";
+        }
+        OutputContext::set(nullptr);
+    }
+}
+
 void Server::pollSockets(VM& vm) {
     for (auto& sock : SocketRegistry::all()) {
         if (sock->fd < 0) continue;
@@ -525,6 +568,12 @@ void Server::handleConnection(Connection& conn) {
         // comment), same "added alongside from the start" note as MSDP
         // just above.
         conn.send(std::string("\xff\xfb\x5b", 3));
+        // MSP (option 90/0x5A; see Connection's own mspEnabled()
+        // comment), same "added alongside from the start" note.
+        conn.send(std::string("\xff\xfb\x5a", 3));
+        // ZMP (option 93/0x5D; see Connection's own zmpEnabled()
+        // comment), same "added alongside from the start" note.
+        conn.send(std::string("\xff\xfb\x5d", 3));
     }
 
     auto obj = conn.boundObject();
@@ -584,6 +633,11 @@ void Server::handleConnection(Connection& conn) {
         OutputContext::set(nullptr);
     }
 
+    // ZMP: pulled out as its own static method (Server.hpp's own
+    // comment) so it is directly testable without a live accept loop,
+    // same as fireMspEnableIfNegotiated() above it.
+    dispatchIncomingZmp(vm_, conn);
+
     // MSSP: a single static data block, sent once right after the
     // client accepts this driver's own proactive "IAC WILL MSSP" (see
     // Connection::sendMssp()'s own comment). No LPC apply involved, so
@@ -592,6 +646,11 @@ void Server::handleConnection(Connection& conn) {
         conn.sendMssp(config_.mudName(), static_cast<int>(connectionCount()),
                       static_cast<int>(std::time(nullptr) - bootTime_));
     }
+
+    // MSP: pulled out as its own static method (Server.hpp's own
+    // comment) so it is directly testable without a live accept loop,
+    // same as dispatchLine()/fireNetDeadIfLinkDead() above it.
+    fireMspEnableIfNegotiated(vm_, conn);
 
     if (obj && !lines.empty()) {
         OutputContext::set(&conn);

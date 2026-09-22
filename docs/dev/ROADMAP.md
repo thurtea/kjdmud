@@ -17,7 +17,7 @@ The language core works. Driver-side capabilities already landed:
 - Multi-port `listen:` (telnet plus extra ports)
 - TLS on marked listen ports
 - WebSocket and WSS
-- Connection encoding (default utf-8), GMCP, MSSP, MSDP, and MXP
+- Connection encoding (default utf-8), GMCP, MSSP, MSDP, MXP, MSP, and ZMP
 - MTTS: already driver-complete (`request_term_type`/
   `start_request_term_type`/`terminal_type`/`query_terminal_type`); the
   bitmask-parsing convention is genuinely mudlib-side in real FluffOS,
@@ -74,6 +74,38 @@ Pages). Old local driver snapshot trees are not kept in this repository;
 FluffOS citation sources for development stay under gitignored `temp/`.
 `query_ip_port` returns the connection accept port under multi-port
 `listen:`.
+
+## Verification note (2026-09-22)
+
+This machine's own vendored `temp/` is absent, but network access to
+clone a fresh copy of real upstream FluffOS for a one-off verification
+pass is available and was used for the MSP row and, independently
+re-verified rather than trusted from that prior summary, the ZMP row
+(`docs/dev/STATUS.md` 2026-09-22 entries for both) - deleted again after
+each use, never vendored into this repo. Do this before assuming a
+not-in-any-driver-source disclaimer is warranted for a new protocol/efun
+row: that same pass corrected three previous entries (GMCP/MSDP/MSSP)
+that had shipped on a "public protocol, no driver to cite" assumption
+made only because no source was checked at the time, not because none
+exists, and `docs/COMPARISON.md` row 2.32's own "not in `src/proto/
+instruct.md`'s own protocol set" guess about MSP/ZMP turned out to mean
+the same thing - absent from one repo's own planning document, not from
+the real driver. `src/proto/instruct.md`'s own five-protocol table is
+now fully closed (GMCP/MSDP/MSSP/MXP landed, MTTS confirmed already
+driver-complete), and MSP/ZMP have landed beyond that file's original
+scope too; the next protocol-shaped gap, if any, would be outside that
+file's own original scope the same way MSP/ZMP were.
+
+A second, separate finding surfaced re-verifying ZMP rather than trusted
+from the prior session's own summary: real `GMCP`/`MSDP` each also have
+their own real `GMCP_ENABLE`/`MSDP_ENABLE` applies
+(`src/vm/internal/applies`) that this repo's own already-shipped
+`gmcp()`/`msdp()` handling never fires - a real, verified gap parallel
+to (but distinct from) the `sendMssp()`/`sendMsdp()`/`sendGmcp()`
+IAC-escaping gap flagged under MSP's own `docs/dev/STATUS.md` entry.
+Neither gap is fixed as of this note; both are candidates for a future
+row, not urgent enough to justify reopening already-shipped, working
+code without being asked.
 
 ## Status record
 

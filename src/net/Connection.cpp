@@ -38,6 +38,13 @@ constexpr unsigned char kTelOptMsdp = 69;
 // Real client-facing MXP telnet option code (public MXP spec, same
 // provenance note as kTelOptMssp/kTelOptMsdp above).
 constexpr unsigned char kTelOptMxp = 91;
+// Real telnet option code for MSP, confirmed directly against current
+// FluffOS source: src/net/telnet.h "#define TELNET_TELOPT_MSP 90".
+constexpr unsigned char kTelOptMsp = 90;
+// Real telnet option code for ZMP, confirmed directly against current
+// FluffOS source: src/thirdparty/libtelnet/libtelnet.h
+// "#define TELNET_TELOPT_ZMP 93".
+constexpr unsigned char kTelOptZmp = 93;
 constexpr unsigned char kTelQualIs = 0;
 constexpr unsigned char kTelQualSend = 1;
 
@@ -288,6 +295,74 @@ void Connection::sendMsdp(const std::string& varName, const std::string& value) 
     out += varName;
     out += static_cast<char>(kMsdpVal);
     out += value;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSe);
+    send(out);
+}
+
+namespace {
+// Real telnet_send() (src/thirdparty/libtelnet/libtelnet.c), used by
+// telnet_subnegotiation() for the payload portion of every real
+// subnegotiation send: doubles any literal IAC (0xFF) byte found before
+// it hits the wire, or a client parsing the subnegotiation would read
+// that lone 0xFF as the start of a new telnet command and truncate the
+// payload right there. Shared here for both sendMspOob() and sendZmp()
+// below, the two sendX() methods in this file whose payload is fully
+// arbitrary mudlib-authored content (unlike sendMssp()'s/sendMsdp()'s
+// own driver-composed ASCII payloads elsewhere in this file, which
+// cannot contain 0xFF in practice - see this row's own STATUS.md entry
+// for why those two, plus sendGmcp(), are flagged as a known gap rather
+// than fixed here too).
+void appendIacEscaped(std::string& out, const std::string& data) {
+    for (unsigned char c : data) {
+        out += static_cast<char>(c);
+        if (c == kIac) out += static_cast<char>(kIac);
+    }
+}
+} // namespace
+
+void Connection::sendMspOob(const std::string& payload) {
+    // Real telnet_send_msp_oob() (src/net/msp.cc): "if (ip->iflags &
+    // USING_MSP) { telnet_subnegotiation(...); }", silently doing
+    // nothing otherwise. No return value either way in the real efun
+    // wrapping this (f_telnet_msp_oob), so a silent no-op matches.
+    if (!mspEnabled_) return;
+    std::string out;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSb);
+    out += static_cast<char>(kTelOptMsp);
+    appendIacEscaped(out, payload);
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSe);
+    send(out);
+}
+
+void Connection::sendZmp(const std::string& command, const std::vector<std::string>& args) {
+    // Real f_send_zmp() (src/packages/core/telnet_ext.cc) only checks
+    // "ip && ip->telnet" (i.e. the connection is interactive at all),
+    // not USING_ZMP - real ZMP has no enabled-flag guard on the send
+    // side the way MSP's telnet_send_msp_oob() has (see that method's
+    // own comment). Matched here deliberately: unlike sendMspOob()'s
+    // real guard, there is no verified "if (ip->iflags & USING_ZMP)"
+    // check to port for the outgoing side.
+    std::string out;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSb);
+    out += static_cast<char>(kTelOptZmp);
+    // Real telnet_begin_zmp()+telnet_zmp_arg() (libtelnet.c): every
+    // field, the command included, is escaped via telnet_send() (see
+    // appendIacEscaped()'s own comment) then NUL-terminated on the wire
+    // ("strlen(arg) + 1" bytes sent per field). Real f_send_zmp() skips
+    // any non-string array element outright rather than erroring; the
+    // efun wrapping this already filters those before calling here (see
+    // NetEfuns.cpp's own send_zmp registration), so this method itself
+    // trusts args to already be all-string.
+    appendIacEscaped(out, command);
+    out += '\0';
+    for (const auto& arg : args) {
+        appendIacEscaped(out, arg);
+        out += '\0';
+    }
     out += static_cast<char>(kIac);
     out += static_cast<char>(kSe);
     send(out);
@@ -624,6 +699,28 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
             mxpEnabled_ = true;
             return;
         }
+        // A client volunteering "IAC WILL MSP" unprompted. Real
+        // on_telnet_do_msp() (src/net/telnet.cc's on_telnet_do()
+        // dispatcher) runs identically whichever side's offer this
+        // negotiation actually completes, so this branch and the Do
+        // branch below both set the same two flags.
+        if (option == kTelOptMsp) {
+            unsigned char resp[] = {kIac, kDo, kTelOptMsp};
+            send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
+            mspEnabled_ = true;
+            mspEnableNegotiated_ = true;
+            return;
+        }
+        // A client volunteering "IAC WILL ZMP" unprompted, same shape
+        // as GMCP's own branch above (a plain enabled flag, no apply
+        // fired here - see Connection.hpp's own zmpEnabled() comment
+        // for why ZMP differs from MSP on that point).
+        if (option == kTelOptZmp) {
+            unsigned char resp[] = {kIac, kDo, kTelOptZmp};
+            send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
+            zmpEnabled_ = true;
+            return;
+        }
         unsigned char resp[] = {kIac, kDont, option};
         send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
     } else if (kind == TelnetState::Do) {
@@ -653,11 +750,28 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
             mxpEnabled_ = true;
             return;
         }
+        // The client's "IAC DO MSP" reply to this driver's own
+        // proactive "IAC WILL MSP" offer, same shape as the MXP branch
+        // just above.
+        if (option == kTelOptMsp) {
+            mspEnabled_ = true;
+            mspEnableNegotiated_ = true;
+            return;
+        }
+        // The client's "IAC DO ZMP" reply to this driver's own
+        // proactive "IAC WILL ZMP" offer, same shape as the MSP branch
+        // just above.
+        if (option == kTelOptZmp) {
+            zmpEnabled_ = true;
+            return;
+        }
         unsigned char resp[] = {kIac, kWont, option};
         send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
     }
     // TS_WONT / TS_DONT: real comm.c sends no reply for any option this
-    // task's scope covers (ECHO, NAWS); nothing to do.
+    // task's scope covers (ECHO, NAWS); ZMP's own real on_telnet_dont()
+    // has no case for it either (falls to the generic "log only, no
+    // action" default there), so no special handling is added here.
 }
 
 void Connection::handleSubnegotiation() {
@@ -711,6 +825,37 @@ void Connection::handleSubnegotiation() {
             incomingMsdp_.emplace_back(std::move(name), std::move(value));
         }
         msdpEnabled_ = true;
+        return;
+    }
+
+    if (sbOption == kTelOptZmp) {
+        // Real _zmp_telnet() (libtelnet.c): the payload must be
+        // non-empty and end in a NUL byte or it is rejected outright as
+        // an incomplete frame (no event fired at all, not a partial
+        // one) - confirmed directly, not assumed. Matched here: a
+        // malformed payload is silently dropped, same as GMCP/MSDP's
+        // sibling branches drop anything they cannot make sense of.
+        // Fields split on NUL: argv[0] is the command, argv[1..] are
+        // the arguments, both already IAC-unescaped and NUL-safe by the
+        // time they reach sbBuffer_ (see processTelnetBytes()'s own
+        // SbIac-state comment; std::string::push_back() there already
+        // preserves embedded 0x00 bytes correctly).
+        std::string payload = sbBuffer_.substr(1);
+        if (!payload.empty() && payload.back() == '\0') {
+            std::vector<std::string> fields;
+            size_t start = 0;
+            while (start < payload.size()) {
+                size_t nul = payload.find('\0', start);
+                fields.push_back(payload.substr(start, nul - start));
+                start = nul + 1;
+            }
+            if (!fields.empty()) {
+                std::string command = std::move(fields.front());
+                std::vector<std::string> args(fields.begin() + 1, fields.end());
+                incomingZmp_.emplace_back(std::move(command), std::move(args));
+            }
+        }
+        zmpEnabled_ = true;
         return;
     }
 

@@ -483,6 +483,142 @@ void testMsdpSubnegotiationIsQueued() {
 // MSSP's own test covers for its Do-branch, minus a fixed data block
 // to assert on since MSDP has none (see Connection::sendMsdp()'s own
 // comment: it sends arbitrary named variables, not one static block).
+// has_msp()/telnet_msp_oob() real signatures (core.spec, confirmed
+// against current FluffOS source, see Connection.hpp's own
+// mspEnabled() comment): telnet_msp_oob operates on current_object, so
+// this mirrors testEncodingAndGmcpEfunsOnASocketpair's shape (current
+// command_giver/object, not a passed-in object arg). Also covers the
+// real "if (ip->iflags & USING_MSP)" silent-no-op guard: the oob send
+// before negotiation must write nothing to the wire at all, not an
+// empty subnegotiation.
+void testMspEfunsWireBytesAndSilentNoopWhenDisabled() {
+    NetHarness harness;
+    harness.writeFile("/msp.c",
+        "int has() { return has_msp(); }\n"
+        "void oob(string s) { telnet_msp_oob(s); }\n");
+    auto obj = harness.objects.cloneObject("/msp");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+    harness.vm.pushCommandGiver(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", {}).data) == 0);
+    harness.vm.callFunction(obj, "oob", {kjdmud::Value(std::string("!!SOUND(bang.wav)"))});
+    assert(readAvailable(fds[1]).empty());
+
+    unsigned char willMsp[] = {255, 251, 90};
+    assert(::write(fds[1], willMsp, sizeof(willMsp)) == static_cast<ssize_t>(sizeof(willMsp)));
+    conn.pollLines();
+    readAvailable(fds[1]);  // drain the driver's own "IAC DO MSP" reply
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", {}).data) == 1);
+
+    harness.vm.callFunction(obj, "oob", {kjdmud::Value(std::string("!!SOUND(bang.wav)"))});
+    std::string wired = readAvailable(fds[1]);
+    assert(static_cast<unsigned char>(wired[0]) == 255);
+    assert(static_cast<unsigned char>(wired[1]) == 250);
+    assert(static_cast<unsigned char>(wired[2]) == 90);
+    assert(wired.find("!!SOUND(bang.wav)") != std::string::npos);
+    assert(static_cast<unsigned char>(wired[wired.size() - 2]) == 255);
+    assert(static_cast<unsigned char>(wired[wired.size() - 1]) == 240);
+
+    // Real telnet_send() (libtelnet.c, used by telnet_subnegotiation()
+    // for the payload portion) doubles any literal IAC (0xFF) byte in
+    // the payload before it hits the wire; an unescaped 0xFF would read
+    // to a real client as a new telnet command starting mid-payload.
+    // sendMspOob() must match, since telnet_msp_oob(string) takes fully
+    // arbitrary mudlib-authored content by design.
+    harness.vm.callFunction(obj, "oob",
+        {kjdmud::Value(std::string("bef\xff""ore", 7))});
+    std::string escaped = readAvailable(fds[1]);
+    // "bef" + FF FF (escaped) + "ore" = 3 + 2 + 3 = 8 payload bytes,
+    // plus the 5-byte IAC SB 90 ... IAC SE frame around it = 13 total.
+    assert(escaped.size() == 13);
+    assert(static_cast<unsigned char>(escaped[0]) == 255);
+    assert(static_cast<unsigned char>(escaped[1]) == 250);
+    assert(static_cast<unsigned char>(escaped[2]) == 90);
+    assert(escaped.substr(3, 3) == "bef");
+    assert(static_cast<unsigned char>(escaped[6]) == 255);
+    assert(static_cast<unsigned char>(escaped[7]) == 255);
+    assert(escaped.substr(8, 3) == "ore");
+    assert(static_cast<unsigned char>(escaped[11]) == 255);
+    assert(static_cast<unsigned char>(escaped[12]) == 240);
+
+    harness.vm.popCommandGiver();
+    ::close(fds[1]);
+    std::cout << "testMspEfunsWireBytesAndSilentNoopWhenDisabled OK\n";
+}
+
+// The client's "IAC DO MSP" reply to this driver's own proactive
+// "IAC WILL MSP" offer, same shape as testMsdpDoReplySetsEnabledFlag,
+// plus the one-shot mspEnableNegotiated_ flag MSDP/MXP have no
+// equivalent of (see Connection.hpp's own mspEnabled() comment on why
+// MSP alone needs it: real code fires an LPC apply here).
+void testMspDoReplySetsEnabledFlagsOnce() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char doMsp[] = {255, 253, 90};
+    assert(::write(fds[1], doMsp, sizeof(doMsp)) == static_cast<ssize_t>(sizeof(doMsp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.mspEnabled());
+    assert(conn.takeMspEnableNegotiated());
+    assert(!conn.takeMspEnableNegotiated());
+
+    ::close(fds[1]);
+    std::cout << "testMspDoReplySetsEnabledFlagsOnce OK\n";
+}
+
+// The one piece of MSP behavior no other protocol row in this file
+// exercises: a real mudlib apply (msp_enable()) actually firing,
+// confirmed against current FluffOS source (src/net/msp.cc's own
+// "safe_apply(APPLY_MSP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"). Drives
+// Server::fireMspEnableIfNegotiated() directly (Server.hpp's own
+// comment: pulled out static, same testable-seam shape as
+// dispatchLine()/fireNetDeadIfLinkDead() above it), not the private
+// handleConnection() - no live Server/accept loop needed, just a VM and
+// a socketpair-backed Connection.
+void testMspEnableFiresMudlibApplyOnce() {
+    NetHarness harness;
+    harness.writeFile("/msp_obj.c",
+        "int enable_calls = 0;\n"
+        "void msp_enable() { enable_calls += 1; }\n"
+        "int enable_call_count() { return enable_calls; }\n");
+    auto obj = harness.objects.cloneObject("/msp_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 0);
+
+    unsigned char doMsp[] = {255, 253, 90};
+    assert(::write(fds[1], doMsp, sizeof(doMsp)) == static_cast<ssize_t>(sizeof(doMsp)));
+    conn.pollLines();
+    kjdmud::Server::fireMspEnableIfNegotiated(harness.vm, conn);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+    // One-shot: a second call with the flag already consumed must not
+    // re-fire. enable_calls increments (not just sets a bool), so this
+    // directly proves no double-fire through the real dispatch path,
+    // not only through the separate flag-level assertion in
+    // testMspDoReplySetsEnabledFlagsOnce.
+    kjdmud::Server::fireMspEnableIfNegotiated(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+
+    ::close(fds[1]);
+    std::cout << "testMspEnableFiresMudlibApplyOnce OK\n";
+}
+
 // mxp_bold/mxp_color/mxp_link all take a required target object (see
 // NetEfuns.cpp's own connectionForRequiredObjectArg() comment), so this
 // mirrors testEncodingAndMsdpEfunsOnASocketpair's shape but passes the
@@ -581,6 +717,273 @@ void testMsdpDoReplySetsEnabledFlag() {
     std::cout << "testMsdpDoReplySetsEnabledFlag OK\n";
 }
 
+// A client volunteering "IAC WILL ZMP" unprompted, same shape as
+// testMxpWillNegotiationRepliesDoAndSetsEnabledFlag: verifies both the
+// reply bytes and the resulting flag.
+void testZmpWillNegotiationRepliesDoAndSetsEnabledFlag() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char willZmp[] = {255, 251, 93};
+    assert(::write(fds[1], willZmp, sizeof(willZmp)) == static_cast<ssize_t>(sizeof(willZmp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.zmpEnabled());
+
+    std::string wired = readAvailable(fds[1]);
+    unsigned char expected[] = {255, 253, 93};
+    assert(wired == std::string(reinterpret_cast<char*>(expected), sizeof(expected)));
+
+    ::close(fds[1]);
+    std::cout << "testZmpWillNegotiationRepliesDoAndSetsEnabledFlag OK\n";
+}
+
+// The client's "IAC DO ZMP" reply to this driver's own proactive
+// "IAC WILL ZMP" offer, same shape as testMsdpDoReplySetsEnabledFlag
+// just above. Unlike MSP, no one-shot apply-fire flag exists for ZMP
+// (see Connection.hpp's own zmpEnabled() comment on why: real
+// on_telnet_do()'s own ZMP case fires no apply on negotiation).
+void testZmpDoReplySetsEnabledFlag() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char doZmp[] = {255, 253, 93};
+    assert(::write(fds[1], doZmp, sizeof(doZmp)) == static_cast<ssize_t>(sizeof(doZmp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.zmpEnabled());
+
+    ::close(fds[1]);
+    std::cout << "testZmpDoReplySetsEnabledFlag OK\n";
+}
+
+// Direct Connection::sendZmp() wire-format test: real framing is
+// "IAC SB ZMP <command>\0<arg1>\0<arg2>\0 IAC SE" (verified against
+// libtelnet.c's telnet_send_zmp()/telnet_zmp_arg()/_zmp_telnet(), see
+// Connection.hpp's own sendZmp() comment), with any literal IAC byte in
+// a field doubled first. Also covers the "unsupported/unnegotiated
+// connection" case directly: real f_send_zmp() has no USING_ZMP guard
+// at all (see sendZmp()'s own .cpp comment, verified against current
+// FluffOS source, not assumed from MSP's own different behavior), so
+// this asserts the send still produces wire bytes with ZMP never
+// negotiated - the correct verified behavior, not a missed guard.
+void testZmpSendFramingEscapesIacAndWorksEvenWithoutNegotiation() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    assert(!conn.zmpEnabled());
+    conn.sendZmp("zmp.ping", {std::string("bef\xff""ore", 7), std::string("plain")});
+    std::string wired = readAvailable(fds[1]);
+
+    // "IAC SB 93" (3) + "zmp.ping\0" (9) + "bef" FF FF "ore\0" (9) +
+    // "plain\0" (6) + "IAC SE" (2) = 29 bytes.
+    assert(wired.size() == 29);
+    assert(static_cast<unsigned char>(wired[0]) == 255);
+    assert(static_cast<unsigned char>(wired[1]) == 250);
+    assert(static_cast<unsigned char>(wired[2]) == 93);
+    assert(wired.substr(3, 9) == std::string("zmp.ping\0", 9));
+    assert(wired.substr(12, 9) == std::string("bef\xff\xff""ore\0", 9));
+    assert(wired.substr(21, 6) == std::string("plain\0", 6));
+    assert(static_cast<unsigned char>(wired[wired.size() - 2]) == 255);
+    assert(static_cast<unsigned char>(wired[wired.size() - 1]) == 240);
+
+    ::close(fds[1]);
+    std::cout << "testZmpSendFramingEscapesIacAndWorksEvenWithoutNegotiation OK\n";
+}
+
+// Inbound parsing: "IAC SB ZMP cmd\0arg1\0arg2\0 IAC SE" must split into
+// a command and an args vector, and set zmpEnabled_ as a side effect
+// the same way GMCP's/MSDP's own subnegotiation branches already do.
+void testZmpInboundParsingQueuesCommandAndArgs() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    std::vector<unsigned char> sb = {255, 250, 93};
+    for (char c : std::string("zmp.ping\0arg1\0arg2\0", 19)) {
+        sb.push_back(static_cast<unsigned char>(c));
+    }
+    sb.push_back(255);
+    sb.push_back(240);
+    sb.push_back('\n');
+    assert(::write(fds[1], sb.data(), sb.size()) == static_cast<ssize_t>(sb.size()));
+
+    auto lines = conn.pollLines();
+    assert(lines.size() == 1);
+    assert(lines[0].empty());
+    assert(conn.zmpEnabled());
+
+    auto zmp = conn.takeIncomingZmp();
+    assert(zmp.size() == 1);
+    assert(zmp[0].first == "zmp.ping");
+    assert(zmp[0].second.size() == 2);
+    assert(zmp[0].second[0] == "arg1");
+    assert(zmp[0].second[1] == "arg2");
+    assert(conn.takeIncomingZmp().empty());
+
+    ::close(fds[1]);
+    std::cout << "testZmpInboundParsingQueuesCommandAndArgs OK\n";
+}
+
+// A ZMP command with no arguments at all ("cmd\0" only) must still
+// queue correctly with an empty args vector, not crash or drop the
+// command - the fields.begin()+1 == fields.end() edge case in
+// handleSubnegotiation()'s own ZMP branch.
+void testZmpInboundParsingHandlesCommandWithNoArgs() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    std::vector<unsigned char> sb = {255, 250, 93};
+    for (char c : std::string("zmp.ping\0", 9)) {
+        sb.push_back(static_cast<unsigned char>(c));
+    }
+    sb.push_back(255);
+    sb.push_back(240);
+    assert(::write(fds[1], sb.data(), sb.size()) == static_cast<ssize_t>(sb.size()));
+    conn.pollLines();
+
+    auto zmp = conn.takeIncomingZmp();
+    assert(zmp.size() == 1);
+    assert(zmp[0].first == "zmp.ping");
+    assert(zmp[0].second.empty());
+
+    ::close(fds[1]);
+    std::cout << "testZmpInboundParsingHandlesCommandWithNoArgs OK\n";
+}
+
+// Real _zmp_telnet() (libtelnet.c) rejects a payload that does not end
+// in a NUL byte as an incomplete frame - no event fires at all, not a
+// partial one. A malformed frame here must not queue anything, though
+// the connection is still marked ZMP-capable (matching the sibling
+// GMCP/MSDP branches, which set their own enabled flag unconditionally
+// on hitting their branch at all, negotiation success already implied
+// by reaching this code path).
+void testZmpMalformedInboundFrameNotEndingInNulIsDiscarded() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    // "cmd\0arg" - no trailing NUL after "arg".
+    std::vector<unsigned char> sb = {255, 250, 93};
+    for (char c : std::string("cmd\0arg", 7)) {
+        sb.push_back(static_cast<unsigned char>(c));
+    }
+    sb.push_back(255);
+    sb.push_back(240);
+    assert(::write(fds[1], sb.data(), sb.size()) == static_cast<ssize_t>(sb.size()));
+    conn.pollLines();
+
+    assert(conn.takeIncomingZmp().empty());
+    assert(conn.zmpEnabled());
+
+    ::close(fds[1]);
+    std::cout << "testZmpMalformedInboundFrameNotEndingInNulIsDiscarded OK\n";
+}
+
+// has_zmp()/send_zmp() real signatures (core.spec, confirmed against
+// current FluffOS source, see NetEfuns.cpp's own has_zmp registration
+// comment): send_zmp operates on command_giver (the opposite of
+// telnet_msp_oob's current_object), and silently filters out any
+// non-string array element rather than erroring.
+void testZmpEfunsUseRealSignaturesAndFilterNonStringArgs() {
+    NetHarness harness;
+    harness.writeFile("/zmp.c",
+        "int has() { return has_zmp(); }\n"
+        "void send_it() { send_zmp(\"zmp.ping\", ({ \"a\", 7, \"b\" })); }\n");
+    auto obj = harness.objects.cloneObject("/zmp");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+    harness.vm.pushCommandGiver(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", {}).data) == 0);
+
+    unsigned char doZmp[] = {255, 253, 93};
+    assert(::write(fds[1], doZmp, sizeof(doZmp)) == static_cast<ssize_t>(sizeof(doZmp)));
+    conn.pollLines();
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", {}).data) == 1);
+
+    harness.vm.callFunction(obj, "send_it", {});
+    std::string wired = readAvailable(fds[1]);
+    // "zmp.ping\0" (9) + "a\0" (2) + "b\0" (2) - the non-string 7 is
+    // filtered out entirely, not sent as a stray empty field.
+    assert(wired.find(std::string("zmp.ping\0a\0b\0", 13)) != std::string::npos);
+
+    harness.vm.popCommandGiver();
+    ::close(fds[1]);
+    std::cout << "testZmpEfunsUseRealSignaturesAndFilterNonStringArgs OK\n";
+}
+
+// The real mudlib apply dispatch: zmp_command(string command, mixed
+// *args), fired once per incoming message via
+// Server::dispatchIncomingZmp() (Server.hpp's own comment: pulled out
+// static for exactly this direct-test reason, mirroring
+// fireMspEnableIfNegotiated()'s own precedent). No live Server/accept
+// loop needed.
+void testZmpCommandApplyDispatchReceivesCommandAndArgsArray() {
+    NetHarness harness;
+    harness.writeFile("/zmp_obj.c",
+        "string last_command = \"\";\n"
+        "mixed *last_args = ({});\n"
+        "int call_count = 0;\n"
+        "void zmp_command(string cmd, mixed *args) {\n"
+        "    last_command = cmd;\n"
+        "    last_args = args;\n"
+        "    call_count += 1;\n"
+        "}\n"
+        "string get_command() { return last_command; }\n"
+        "mixed *get_args() { return last_args; }\n"
+        "int get_call_count() { return call_count; }\n");
+    auto obj = harness.objects.cloneObject("/zmp_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    std::vector<unsigned char> sb = {255, 250, 93};
+    for (char c : std::string("zmp.ping\0hello\0world\0", 21)) {
+        sb.push_back(static_cast<unsigned char>(c));
+    }
+    sb.push_back(255);
+    sb.push_back(240);
+    assert(::write(fds[1], sb.data(), sb.size()) == static_cast<ssize_t>(sb.size()));
+    conn.pollLines();
+
+    kjdmud::Server::dispatchIncomingZmp(harness.vm, conn);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "get_call_count", {}).data) == 1);
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "get_command", {}).data) == "zmp.ping");
+    auto argsVal = harness.vm.callFunction(obj, "get_args", {});
+    auto argsArr = std::get<std::shared_ptr<kjdmud::Array>>(argsVal.data);
+    assert(argsArr->items.size() == 2);
+    assert(std::get<std::string>(argsArr->items[0].data) == "hello");
+    assert(std::get<std::string>(argsArr->items[1].data) == "world");
+
+    // A second drain with nothing new queued must not re-fire.
+    kjdmud::Server::dispatchIncomingZmp(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "get_call_count", {}).data) == 1);
+
+    ::close(fds[1]);
+    std::cout << "testZmpCommandApplyDispatchReceivesCommandAndArgsArray OK\n";
+}
+
 } // namespace
 
 // src/config/instruct.md Phase 0's own max_connections row.
@@ -664,4 +1067,15 @@ void runNetTests() {
     testMxpEfunsWrapTextOnlyWhenEnabled();
     testMxpWillNegotiationRepliesDoAndSetsEnabledFlag();
     testMxpDoReplySetsEnabledFlag();
+    testMspEfunsWireBytesAndSilentNoopWhenDisabled();
+    testMspDoReplySetsEnabledFlagsOnce();
+    testMspEnableFiresMudlibApplyOnce();
+    testZmpWillNegotiationRepliesDoAndSetsEnabledFlag();
+    testZmpDoReplySetsEnabledFlag();
+    testZmpSendFramingEscapesIacAndWorksEvenWithoutNegotiation();
+    testZmpInboundParsingQueuesCommandAndArgs();
+    testZmpInboundParsingHandlesCommandWithNoArgs();
+    testZmpMalformedInboundFrameNotEndingInNulIsDiscarded();
+    testZmpEfunsUseRealSignaturesAndFilterNonStringArgs();
+    testZmpCommandApplyDispatchReceivesCommandAndArgsArray();
 }
