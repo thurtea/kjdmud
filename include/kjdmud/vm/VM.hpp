@@ -51,6 +51,18 @@ enum class Origin {
 // order as real origin.h's own bit-shift enum.
 const char* originName(Origin origin);
 
+// real struct defer_list (interpret.h): one closure registered by the
+// defer() efun against the currently-executing function frame, plus the
+// command_giver active at registration time (real f_defer()'s own
+// "if (command_giver) { push_object(command_giver); newlist->tp = ..." ,
+// efuns_main.cc). Namespace-scope rather than nested in VM so both
+// VM::deferStack_ and VM.cpp's own free-standing DeferFrameGuard class
+// can name it.
+struct DeferEntry {
+    std::shared_ptr<Closure> closure;
+    std::shared_ptr<LpcObject> commandGiver;
+};
+
 class VM {
 public:
     VM(ObjectManager& objects, Config& config);
@@ -296,6 +308,17 @@ public:
     // (real call_function_pointer()'s own "Owner ... is destructed"
     // check) or if the bare name resolves to nothing at all.
     Value callClosure(const std::shared_ptr<Closure>& closure, std::vector<Value> extraArgs);
+
+    // real defer() efun (core.spec, F_DEFER/f_defer(), efuns_main.cc):
+    // registers closure to run when the *currently executing* function
+    // frame returns (normal or error), prepended to the innermost active
+    // run() frame's own defer list (default, non-__RC_REVERSE_DEFER__
+    // mode: this driver does not implement that config toggle, see
+    // VM.cpp's own DeferFrameGuard comment). No-ops (matching real
+    // f_defer() being unreachable outside any control-stack frame at all,
+    // since it can only ever be called from inside one) if deferStack_
+    // is empty, i.e. called with no active run() frame beneath it.
+    void registerDefer(const std::shared_ptr<Closure>& closure);
 
     // Resolves an absolute-from-mudlib-root LPC path (e.g. the "cfg"
     // argument to read_file()/write_file()) to a real filesystem path,
@@ -555,6 +578,16 @@ private:
     // same dispatchCommand() path) nests a new verb without necessarily
     // changing the command_giver.
     std::vector<std::string> verbStack_;
+
+    // One entry per still-active run() call, the same parallel shape
+    // callStack_ already has (pushed/popped by VM.cpp's own
+    // DeferFrameGuard, constructed immediately after run()'s own
+    // ObjectFrameGuard so its destructor fires first, running any
+    // registered defers while this frame's callStack_/current_object
+    // entry is still in place, matching real pop_control_stack()'s own
+    // defer loop running before current_object is restored to the
+    // caller). See registerDefer()/DeferEntry.
+    std::vector<std::vector<DeferEntry>> deferStack_;
 
     // See currentOrigin()/pushOrigin()/popOrigin(). Real caller_type
     // (interpret.c), saved/restored across the control stack around

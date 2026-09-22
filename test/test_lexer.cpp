@@ -31017,6 +31017,128 @@ static void testDestructEfunFiresOnDestructThroughTheRealEfunCallPath() {
     std::cout << "testDestructEfunFiresOnDestructThroughTheRealEfunCallPath OK\n";
 }
 
+// void defer(function). Real core.spec:71/F_DEFER's own f_defer()
+// (efuns_main.cc) and pop_control_stack()'s own defer loop
+// (interpret.cc), verified against current upstream FluffOS (this
+// repo's own vendored temp/reference/fluffos-2.9-ds2.08/ predates
+// defer() entirely - confirmed no "defer" hit anywhere under temp/ at
+// all - so citations for this efun are against a fresh clone, not the
+// pinned reference tree). See VM::registerDefer()/VM.cpp's own
+// DeferFrameGuard for the implementation.
+
+static void testDeferFiresAfterFunctionReturnsInLifoOrder() {
+    ObjectVarHarness harness;
+    harness.writeFile("/defer_probe.c",
+        "int *log = ({});\n"
+        "void mark(int n) { log += ({n}); }\n"
+        "int *get_log() { return log; }\n"
+        "void run_with_defers() {\n"
+        "    defer((: mark, 1 :));\n"
+        "    defer((: mark, 2 :));\n"
+        "    mark(0);\n"
+        "}\n");
+    auto ob = harness.objects.cloneObject("/defer_probe");
+    assert(ob != nullptr);
+
+    harness.vm.callFunction(ob, "run_with_defers", {});
+
+    auto logVal = harness.vm.callFunction(ob, "get_log", {});
+    auto arr = std::get<std::shared_ptr<kjdmud::Array>>(logVal.data);
+    assert(arr->items.size() == 3);
+    // 0 first (the synchronous in-body call, proving defers had not
+    // fired yet while the function was still running), then 2, then 1
+    // (real f_defer()'s own default prepend-to-head mode: the most
+    // recently registered defer fires first).
+    assert(std::get<int64_t>(arr->items[0].data) == 0);
+    assert(std::get<int64_t>(arr->items[1].data) == 2);
+    assert(std::get<int64_t>(arr->items[2].data) == 1);
+
+    std::cout << "testDeferFiresAfterFunctionReturnsInLifoOrder OK\n";
+}
+
+static void testDeferRunsEvenWhenFunctionThrows() {
+    ObjectVarHarness harness;
+    harness.writeFile("/defer_throw_probe.c",
+        "int *log = ({});\n"
+        "void mark(int n) { log += ({n}); }\n"
+        "int *get_log() { return log; }\n"
+        "void run_and_throw() {\n"
+        "    defer((: mark, 5 :));\n"
+        "    object x;\n"
+        "    x->nonexistent_call();\n"
+        "}\n");
+    auto ob = harness.objects.cloneObject("/defer_throw_probe");
+    assert(ob != nullptr);
+
+    bool threw = false;
+    try {
+        harness.vm.callFunction(ob, "run_and_throw", {});
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    assert(threw);
+
+    auto logVal = harness.vm.callFunction(ob, "get_log", {});
+    auto arr = std::get<std::shared_ptr<kjdmud::Array>>(logVal.data);
+    assert(arr->items.size() == 1);
+    assert(std::get<int64_t>(arr->items[0].data) == 5);
+
+    std::cout << "testDeferRunsEvenWhenFunctionThrows OK\n";
+}
+
+static void testDeferErrorInOneClosureDoesNotBlockTheRestOfTheList() {
+    ObjectVarHarness harness;
+    harness.writeFile("/defer_bad_probe.c",
+        "int *log = ({});\n"
+        "void mark(int n) { log += ({n}); }\n"
+        "int *get_log() { return log; }\n"
+        "void bad_mark() { object x; x->nonexistent_call(); }\n"
+        "void run_with_bad_defer() {\n"
+        "    defer((: mark, 10 :));\n"
+        "    defer((: bad_mark :));\n"
+        "    defer((: mark, 20 :));\n"
+        "}\n");
+    auto ob = harness.objects.cloneObject("/defer_bad_probe");
+    assert(ob != nullptr);
+
+    // Must not throw out of run_with_bad_defer() itself: each deferred
+    // call is its own error-isolated try, matching real
+    // safe_call_efun_callback()'s own protection.
+    harness.vm.callFunction(ob, "run_with_bad_defer", {});
+
+    auto logVal = harness.vm.callFunction(ob, "get_log", {});
+    auto arr = std::get<std::shared_ptr<kjdmud::Array>>(logVal.data);
+    // LIFO: mark(20) first, then bad_mark() (throws, swallowed, logs
+    // nothing), then mark(10) still runs despite bad_mark()'s error.
+    assert(arr->items.size() == 2);
+    assert(std::get<int64_t>(arr->items[0].data) == 20);
+    assert(std::get<int64_t>(arr->items[1].data) == 10);
+
+    std::cout << "testDeferErrorInOneClosureDoesNotBlockTheRestOfTheList OK\n";
+}
+
+static void testDeferClosureSeesCommandGiverActiveAtRegistration() {
+    ObjectVarHarness harness;
+    harness.writeFile("/defer_cg_probe.c",
+        "object observed;\n"
+        "void record_cg() { observed = this_player(); }\n"
+        "object get_observed() { return observed; }\n"
+        "void register_defer_only() { defer((: record_cg :)); }\n");
+    harness.writeFile("/defer_cg_player.c", "");
+    auto ob = harness.objects.cloneObject("/defer_cg_probe");
+    auto player = harness.objects.cloneObject("/defer_cg_player");
+    assert(ob != nullptr && player != nullptr);
+
+    harness.vm.pushCommandGiver(player);
+    harness.vm.callFunction(ob, "register_defer_only", {});
+    harness.vm.popCommandGiver();
+
+    auto observedVal = harness.vm.callFunction(ob, "get_observed", {});
+    assert(std::get<std::shared_ptr<kjdmud::LpcObject>>(observedVal.data) == player);
+
+    std::cout << "testDeferClosureSeesCommandGiverActiveAtRegistration OK\n";
+}
+
 // ROADMAP.md row 2.5's own first slice (C++20 coroutine scheduler).
 // Real row 2.6 async/await grammar does not exist yet. No async/await
 // token appears anywhere under src/compiler, confirmed directly. so
@@ -33129,6 +33251,10 @@ int main() {
     testOnDestructFiresOnlyWhenNotifyDestructIsSet();
     testOnDestructErrorIsSwallowedAndDestructionStillProceeds();
     testDestructEfunFiresOnDestructThroughTheRealEfunCallPath();
+    testDeferFiresAfterFunctionReturnsInLifoOrder();
+    testDeferRunsEvenWhenFunctionThrows();
+    testDeferErrorInOneClosureDoesNotBlockTheRestOfTheList();
+    testDeferClosureSeesCommandGiverActiveAtRegistration();
     testAsyncFunctionSuspendsOnAwaitAndResumesWithLocalStatePreserved();
     testOrdinarySynchronousFunctionUnaffectedByAsyncMachineryExistingInTheSameBinary();
     testAwaitReachedThroughANestedPlainCallPropagatesSuspendCorrectly();

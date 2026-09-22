@@ -3,9 +3,18 @@
 kjdmud is a from-scratch LPC MUD driver written in C++20: lexer, parser,
 bytecode compiler, VM, object system, call_out/heart_beat, and net. LPC
 is mudlib-only. The host runtime stays C++20. Do not rewrite the driver
-in LPC. The product is the driver. `mudlib/` is a minimum Library that
-ships with the driver so it can boot and be tested. Track G world kit
-proves that Library; do not grow a Palladium rules dump.
+in LPC.
+
+**2026-09-22 scope decision:** the driver side of "the product is the
+driver, `mudlib/` stays minimal" is unchanged. The mudlib side of it is
+superseded: `mudlib/` is now the real foundation for a Rifts-themed
+game (working title RiftsMUD 2.0), built from scratch in LPC, not
+adopted from an existing base lib (that option was considered and
+explicitly declined). The old "do not grow a Palladium rules dump"
+line was the right call while the driver itself was unfinished; the
+driver is solid now, so this reverses. Real command conventions first
+(communication verbs, not the placeholder `talk`), then stats/skills,
+races/OCCs, combat, magic/psionics, and locations on top.
 
 Primary dialect target is FluffOS. The `dialect` config also selects
 LDMud. DGD is comparison-only.

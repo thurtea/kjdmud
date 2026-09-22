@@ -4053,6 +4053,23 @@ void registerCoreEfuns() {
     t.registerEfun("evaluate", evaluateImpl);
     t.registerEfun("funcall", evaluateImpl);
 
+    // void defer(function). Real core.spec:71/F_DEFER's own f_defer()
+    // (efuns_main.cc): registers closure to run when the calling
+    // function's own frame returns. See VM::registerDefer()/
+    // DeferFrameGuard (VM.cpp) for where it actually fires. A no-op
+    // silent bad-argument return, matching this table's own established
+    // "closure-typed argument, wrong type given" convention (evaluateImpl
+    // just above) rather than throwing, since real f_defer() has no
+    // argument-type check of its own either (core.spec's own "function"
+    // parameter type already guarantees a closure reaches it).
+    t.registerEfun("defer", [](VM& vm, std::vector<Value>& args) -> Value {
+        if (args.empty()) return Value{};
+        auto* closurePtr = std::get_if<std::shared_ptr<Closure>>(&args[0].data);
+        if (!closurePtr || !*closurePtr) return Value{};
+        vm.registerDefer(*closurePtr);
+        return Value{};
+    });
+
     // closure unbound_lambda(mixed *args, mixed). LDMud-only (real
     // func_spec:500's own declaration; ROADMAP.md row 1.7/1.8, greenlit
     // by real corpus evidence: secure/master/hooks.c's own 4 real call

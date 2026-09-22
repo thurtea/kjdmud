@@ -175,6 +175,49 @@ private:
     kjdmud::VM& vm_;
 };
 
+// RAII push/run/pop of VM's deferStack_ (real defer_list/pop_control_stack()
+// defer loop, interpret.cc). Constructed only at run()'s own frame
+// boundary (its own ObjectFrameGuard's comment explains why every
+// other call site never recurses into fresh LPC bytecode and so has no
+// meaningful "this function's own defer list" to speak of), immediately
+// after run()'s ObjectFrameGuard so C++'s reverse-destruction-order
+// runs this guard's destructor first: defers fire while callStack_/
+// current_object still reflects the frame that is ending, exactly
+// matching real pop_control_stack() running its defer loop before
+// restoring current_object/current_prog/etc from csp.
+class DeferFrameGuard {
+public:
+    DeferFrameGuard(kjdmud::VM& vm, std::vector<std::vector<kjdmud::DeferEntry>>& deferStack)
+        : vm_(vm), deferStack_(deferStack) {
+        deferStack_.emplace_back();
+    }
+    ~DeferFrameGuard() {
+        std::vector<kjdmud::DeferEntry> pending = std::move(deferStack_.back());
+        deferStack_.pop_back();
+        // Real f_defer() prepends each new entry to csp->defers' own
+        // head (default, non-__RC_REVERSE_DEFER__ mode), and the defer
+        // loop walks head to tail, so firing in reverse-of-registration
+        // (this frame's most recently registered defer first) matches
+        // real semantics. Each call is its own try/catch, matching real
+        // safe_call_efun_callback()'s own error isolation, one bad
+        // defer must not skip the rest of the list or break frame
+        // teardown.
+        for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+            try {
+                kjdmud::CommandGiverGuard commandGiverGuard(vm_, it->commandGiver);
+                vm_.callClosure(it->closure, {});
+            } catch (const std::exception&) {
+            }
+        }
+    }
+    DeferFrameGuard(const DeferFrameGuard&) = delete;
+    DeferFrameGuard& operator=(const DeferFrameGuard&) = delete;
+
+private:
+    kjdmud::VM& vm_;
+    std::vector<std::vector<kjdmud::DeferEntry>>& deferStack_;
+};
+
 // Real FluffOS's T_UNDEFINED is a *subtype* of T_NUMBER (a number whose
 // value already is 0, just tagged specially so undefinedp() can detect
 // it). Not a separate value kind that arithmetic has to special-case.
@@ -974,6 +1017,15 @@ void VM::popCommandGiver() {
     if (!commandGiverStack_.empty()) commandGiverStack_.pop_back();
 }
 
+void VM::registerDefer(const std::shared_ptr<Closure>& closure) {
+    // Real f_defer() unconditionally captures command_giver (const0 when
+    // null, efuns_main.cc), the same "capture at registration time, not
+    // at fire time" semantics DeferFrameGuard's own CommandGiverGuard
+    // relies on.
+    if (deferStack_.empty()) return;
+    deferStack_.back().push_back(DeferEntry{closure, commandGiver()});
+}
+
 std::string VM::currentVerb() const {
     return verbStack_.empty() ? std::string() : verbStack_.back();
 }
@@ -1622,6 +1674,10 @@ Value VM::run(const CompiledProgram& program, const FunctionEntry& fn,
     // ObjectFrameGuard's own comment for the real-semantics citation.
     ObjectFrameGuard objectFrameGuard(
         callStack_, objectChangeStack_, functionNameStack_, obj, fn.name);
+
+    // Constructed after objectFrameGuard so its destructor runs first
+    // (reverse construction order). See DeferFrameGuard's own comment.
+    DeferFrameGuard deferFrameGuard(*this, deferStack_);
 
     // Base offset to add to this program's own PushObjectVar/
     // StoreObjectVar slot numbers before indexing obj->variables() (see
