@@ -9,8 +9,8 @@ primary dialect target is FluffOS-style LPC. The `dialect` config switch
 can also select LDMud. A small bundled mudlib ships so the driver can boot
 and be tested.
 
-Homepage: https://thurtea.github.io/kjdmud/
-Web client: https://thurtea.github.io/kjdmud/client.html
+Homepage: https://thurtea.com/kjdmud/
+Web client: https://thurtea.com/kjdmud/client.html
 Source: https://github.com/thurtea/kjdmud
 
 ## Features

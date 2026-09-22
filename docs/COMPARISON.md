@@ -335,10 +335,14 @@ makes "56% of Phase 2" and the roughly 63% rollup overstate how much of
 Phase 2's novel-architecture surface actually exists. Object swapout
 (2.2), hotboot (2.3), `async`/`await` with the awaitable call_out and
 Open Hydra (2.6 through 2.8), closure bake-at-construction (2.10), the
-LLVM JIT (2.11), TLS (2.13), WebSocket (2.14),
-`json_encode`/`json_decode` (2.17), async HTTP (2.18), the LSP server
-(2.19), structured error objects (2.20), live hot-reload (2.21), and
-the LPC-native test runner (2.22) are all still `[ ]`.
+LLVM JIT (2.11), async HTTP (2.18), the LSP server (2.19), structured
+error objects (2.20), and live hot-reload (2.21) are all still `[ ]`.
+(This paragraph is from an earlier session and has accumulated
+staleness beyond just its own original 2.17 entry, corrected here -
+`json_parse`/`json_serialize` landed 2026-09-22, `docs/dev/STATUS.md`'s
+own dated entry; TLS/WebSocket (2.13/2.14) and the LPC-native test
+runner (2.22) are also stale in this same sentence, corrected at their
+own rows below, not rewritten again here.)
 
 **Row 3.9 (third-party mudlib) strengthened since this file last called
 it a "boot-and-play confirmation".** AetherMUD (a real
@@ -387,7 +391,7 @@ command, unlike real FluffOS's per-task recovery) was also fixed,
 | 2.14 | Open | WebSocket framing on top of TLS |
 | 2.15 | Done | SQLite built-in `db_*` efuns (LDMud shape, dialect-gated to `ldmud`) |
 | 2.16 | Done | `hash()` digest efun (SHA-256/512, MD5, RIPEMD, and more) |
-| 2.17 | Open | `json_encode`/`json_decode` efun pair |
+| 2.17 | Done | `json_parse`/`json_serialize`, real names (not `json_encode`/`json_decode` as this row's own original text guessed, never checked at the time); real LDMud efuns, dialect-gated to `ldmud` same as `db_*` (2.15); real FluffOS has no JSON support at all to diverge from, confirmed directly, see `docs/dev/STATUS.md` 2026-09-22 |
 | 2.18 | Open | `http_get`/`http_post` async efuns (non-blocking, via async scheduler) |
 | 2.19 | Open | LSP server for LPC (`--lsp`): hover, go-to-def, diagnostics |
 | 2.20 | Open | Structured error objects: JSON-serializable source/line/column/message |
@@ -592,7 +596,7 @@ applicable).
 | Hotboot (fd-passing exec, connections survive) | No (Phase 2 row 2.3, not started) | Yes | Yes | Yes (via statedump/restart, different mechanism) |
 | World-level statedump / object swapout | Partial (row 2.1 statedump v1 slice landed, plus row 2.4 dual persistence coexistence; object swapout row 2.2, not started) |, |, | Yes (DGD's own signature architecture) |
 | TLS / WebSocket | No (Phase 2, not started) | Not in this vendored ds2.08 snapshot | Not checked | Not checked |
-| Built-in SQLite / hash / JSON efuns | Partial (SQLite `db_connect`/`db_exec`/`db_fetch`/`db_close`, row 2.15, real LDMud shape specifically, dialect-gated to `dialect: ldmud` per row 2.40. Real current FluffOS's own `db.spec` has a genuinely different `db_*` contract this driver does not implement; `hash()`, row 2.16, built and landed; JSON efuns, row 2.17, not started) | Some (own DB package options) | Some | Some |
+| Built-in SQLite / hash / JSON efuns | Partial (SQLite `db_connect`/`db_exec`/`db_fetch`/`db_close`, row 2.15, real LDMud shape specifically, dialect-gated to `dialect: ldmud` per row 2.40. Real current FluffOS's own `db.spec` has a genuinely different `db_*` contract this driver does not implement; `hash()`, row 2.16, built and landed; `json_parse`/`json_serialize`, row 2.17, built and landed, also real-LDMud-shape-specifically and dialect-gated the same way) | Some (own DB package options) | Some | Some |
 | LSP server (`--lsp`) | No (Phase 2, not started) |, |, |: |
 | Generational GC (replacing `shared_ptr`) | No (Phase 3, not started) | Real GC | Real GC | Real GC |
 | Full privilege/uid trust hierarchy | Partial (`privs()`, no full uid/euid/domain hierarchy) | Yes | Yes | Yes (own model) |

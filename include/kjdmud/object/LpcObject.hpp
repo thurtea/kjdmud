@@ -161,6 +161,20 @@ public:
     bool isHidden() const { return hidden_; }
     void setHidden(bool h) { hidden_ = h; }
 
+    // real object_t's O_NOTIFY_DESTRUCT flag (set_notify_destruct()/
+    // query_notify_destruct(), confirmed against current upstream
+    // FluffOS: src/packages/core/efuns_main.cc's own f_set_notify_
+    // destruct()/f_query_notify_destruct(), src/vm/internal/base/
+    // object.h's own "#define O_NOTIFY_DESTRUCT 0x01u"). When set,
+    // simulate.cc's own destruct_object() fires APPLY_ON_DESTRUCT
+    // (real LPC name "on_destruct", confirmed directly against that
+    // same file's own real call site) before the object is actually
+    // unlinked, swallowing any error the apply itself throws so
+    // destruction always proceeds regardless (see VM::destructObject()'s
+    // own comment for exactly where this driver ports that ordering).
+    bool notifyDestruct() const { return notifyDestruct_; }
+    void setNotifyDestruct(bool v) { notifyDestruct_ = v; }
+
     // real object_t's O_IS_WIZARD flag (enable_wizard()/disable_wizard()/
     // wizardp()). Same shape and same deliberately narrow scope as
     // hidden_/isHidden() just above: only the flag itself, not every
@@ -437,6 +451,7 @@ private:
     bool destructed_ = false;
     bool everInteractive_ = false;
     bool hidden_ = false;
+    bool notifyDestruct_ = false;
     bool isWizard_ = false;
     std::vector<ActionEntry> actions_;
     std::optional<std::string> privs_;

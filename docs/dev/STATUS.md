@@ -1,5 +1,118 @@
 # STATUS
 
+**2026-09-22: Rifts mudlib content walkthrough confirmed live, and a
+`temp/` restoration.** The user's own local machine turned out to hold
+`/home/thurtea/Documents/backups/amlp/temp/` - the original "amlp"
+predecessor project's full backup, including the exact
+`reference/fluffos-2.9-ds2.08/` tree this repo's own citations have
+always referred to and a second real corpus,
+`ds3.8.2_extracted/ds3.8.2/fluffos-2.23-ds03/`. Both copied into this
+repo's own gitignored `temp/` (not committed; `.gitignore`'s own
+`temp/` line already covers it), replacing this session's earlier
+fresh-clone-then-delete workaround with the actual pinned source future
+citation work in this repo should use. `tmi2_fluffos_v3` (the historical
+"real mudlib boots" probe cited throughout this file's own 2026-09-17
+entries) is also there, but turned out not to be Rifts-themed at all (a
+generic Dead-Souls-adjacent base mudlib, confirmed by reading its own
+bundled FAQ and grepping its own tree for Rifts terms, zero hits) -
+not useful for the user's own stated Rifts-mudlib goal specifically,
+so not restored into this repo.
+
+Live-walked the bundled mudlib's own existing `mudlib/domains/rifts/`
+content end to end over a real telnet session: created a character,
+linked a wizard `exit` command from the gatehouse to the real
+`/domains/rifts/rooms/lower_gate` path, then moved through the room
+graph normally (lower_gate -> watch_post -> back -> market_lane),
+`examine`d a scenery item (the poster) and an NPC (the 'Burbs hawker),
+and `take`/`drop`d a real item (the ration tin, once using one of its
+own registered single-word ids - `take ration tin` failing on the
+two-word phrase is this test item's own content choice, not a driver
+gap; `set_ids()` only lists `"ration_tin"`/`"tin"`/`"ration"`, no
+multi-word id with a space). All of it worked correctly on a real
+connection, not just by code inspection.
+
+One real, reproducible anomaly surfaced and diagnosed along the way,
+not yet acted on: `this_player()->move_object(dest)`, called from
+inside the `eval` command's own nested `/tmp_eval_file::eval()` call,
+silently does not move the connected player (confirmed directly:
+`environment(this_player())` read back identical before and after).
+Root cause traced to `eval.c`'s own two-level indirection
+(`command/eval.c`'s `main()` calls `"/tmp_eval_file"->eval()`, and the
+mudlib-supplied statement runs as *that* object's own code) rather than
+a general `call_other`/`current_object()` bug: the realistic pattern -
+an item's own `move()` method internally calling `move_object()`,
+reached through exactly one `call_other` from a normal add_action verb
+- already works, proven live by this same session's own `take`/`drop`
+succeeding. Lower priority than a general driver defect would be, since
+real admin "goto"-style commands are written as normal verbs, not
+routed through `eval`'s own debug-only double indirection; flagged here
+rather than silently dropped, not chased further this session.
+
+**2026-09-22: json_parse()/json_serialize() (ROADMAP.md row 2.17).**
+Real LDMud efuns (`src/pkg-json.c`'s own `f_json_parse()`/
+`f_json_serialize()`, confirmed against a fresh clone of current
+upstream `ldmud/ldmud` - this repo's own vendored `temp/ldmud/` is
+still absent even after this row's own `temp/` restoration above,
+deleted again after use). Real signatures: `mixed json_parse(string
+jsonstr)` and `string json_serialize(mixed value)` - not
+`json_encode`/`json_decode` as row 2.17's own original text guessed
+(never checked against real source at the time; same class of miss as
+row 2.32's own original MSP/ZMP guess, corrected earlier this session).
+Real current FluffOS has no JSON support at all, confirmed directly
+against both a fresh upstream clone and this session's own newly
+restored `temp/reference/fluffos-2.9-ds2.08/` (zero hits either way),
+so this pair is genuinely LDMud-only and is dialect-gated to `"ldmud"`
+the same way the `db_*` family already is (`requireLdmudJsonDialect`,
+mirroring that family's own `requireLdmudDbDialect`).
+
+No JSON library is vendored anywhere in this driver's own dependency
+set (checked directly: nothing in `CMakeLists.txt` links one), so both
+directions are a hand-written recursive-descent parser/serializer
+(`EfunTable.cpp`'s own `json` namespace, right before
+`registerCoreEfuns()`), not a wrapped third-party library the way real
+LDMud wraps `json-c`. Real type coverage confirmed directly against
+`pkg-json.c`'s own doc comments: `json_serialize()` handles
+`T_NUMBER`/`T_FLOAT`/`T_STRING`/`T_POINTER` (array)/`T_MAPPING` (width
+1 only, string keys only - both real, verified error conditions) and
+errors on everything else (object, closure, buffer - this driver's own
+`Value` has no struct alternative at all, so real LDMud's own
+`T_STRUCT` case has nothing to port); `json_parse()` maps JSON
+null/boolean to LPC int, JSON int/double to LPC int/float, JSON string
+to LPC string, JSON object to an LPC mapping (width 1, string keys),
+and JSON array to an LPC array, matching that same doc comment's own
+type table exactly. A whole-number float (e.g. `3.0`) is serialized
+with an explicit trailing `.0` even though `%.17g` alone would print a
+bare `3` for it, so a round trip through `json_parse(json_serialize(x))`
+preserves the float/int distinction rather than silently narrowing it -
+a real, verified round-trip requirement, not a stylistic choice.
+`\uXXXX` string escapes are decoded to real UTF-8, including standard
+UTF-16 surrogate pairs for codepoints above the BMP (a lone,
+unpaired surrogate is encoded as-is rather than rejected, matching this
+driver's own general leniency elsewhere; not a case real JSON input
+commonly produces).
+
+5 new regression tests in `test/test_lexer.cpp`: a full round-trip
+across every real-supported scalar and container type (including the
+whole-number-float and nested-container cases), string escape/Unicode
+handling (basic escapes, a BMP codepoint, and a real surrogate pair,
+each asserting the exact real UTF-8 byte sequence produced), malformed-
+input rejection (six distinct real parse-error shapes), the
+width-greater-than-one/non-string-key/unsupported-type serialize
+rejections (the width>1 case built directly via `Mapping::
+appendEntry()` in C++ and passed as a real call argument, since no LPC
+mapping-literal syntax produces a width>1 mapping to route through a
+compiled call), and the dialect gate itself (mirroring the existing
+`db_*` family's own gate test exactly). Full clean rebuild from scratch
+(exit 0), `ctest` 2/2 green, and a live boot (a temporary `dialect:
+ldmud` config copy, this repo's own bundled config defaulting to
+fluffos) where a real telnet client's `eval` command confirmed
+`json_serialize()` on a real mapping, `json_parse()` on a real JSON
+object with correct mapping-index read-back, an array round trip
+through both efuns together, and a malformed-JSON call producing a
+clean, isolated per-command error rather than a crash - matching this
+session's own established "compile the string, don't guess" verification
+standard for every new efun landed tonight.
+
 **2026-09-22: ZMP mudlib usage docs, plus one end-to-end regression
 test.** New `docs/dev/PROTOCOLS.md`: mudlib-facing usage notes for
 out-of-band protocol efuns/applies, ZMP only for now (a `has_gmcp`-style

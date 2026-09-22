@@ -1145,6 +1145,333 @@ std::string queryNumWord(int64_t n, int64_t limit) {
     return ret;
 }
 
+// json_parse()/json_serialize(): real LDMud efuns (src/pkg-json.c's own
+// f_json_parse()/f_json_serialize()), confirmed against a fresh clone of
+// current upstream ldmud/ldmud (this repo's own vendored temp/ldmud/ is
+// absent on this machine; deleted again after use, never vendored into
+// this repo, same "one-off verification" pattern as this session's
+// protocol rows). Real signatures: "mixed json_parse(string jsonstr)"
+// and "string json_serialize(mixed value)" - not "json_encode"/
+// "json_decode" as docs/COMPARISON.md row 2.17's own original guess had
+// it (that row predates any real source being checked for it, same
+// class of miss as row 2.32's own original MSP/ZMP guess). Real
+// FluffOS has no JSON support at all, native or otherwise, confirmed
+// directly (grepped both a fresh upstream clone and this repo's own
+// vendored temp/reference/fluffos-2.9-ds2.08/, zero hits either way) -
+// this pair is genuinely LDMud-only, so it is dialect-gated to
+// "ldmud" the same way the db_* family already is (see that family's
+// own requireLdmudDbDialect comment for the precedent this follows).
+//
+// json_serialize()'s real type coverage (pkg-json.c's own
+// ldmud_json_serialize(), confirmed directly): T_NUMBER, T_FLOAT,
+// T_STRING, T_POINTER (array), and T_MAPPING (width 1 only, string
+// keys only - both real, verified error conditions, not invented
+// here) all serialize; T_STRUCT also does in real LDMud, but this
+// driver's own Value has no struct alternative in ValueVariant at all
+// (see Value.hpp's own comment on the variant's members), so there is
+// nothing to port for that one real case. Every other type (object,
+// closure, buffer) errors, matching real LDMud's own "only the
+// following LPC types are serialized... all other LPC types cause a
+// runtime error."
+//
+// json_parse()'s real type mapping (pkg-json.c's own doc comment,
+// confirmed directly): JSON null/boolean both become LPC int (0, or
+// 0/1), JSON int becomes LPC int, JSON double becomes LPC float, JSON
+// string becomes LPC string, JSON object becomes an LPC mapping (width
+// 1, string keys), JSON array becomes an LPC array. No vendored JSON
+// library exists in this driver's own dependency set (checked: nothing
+// in CMakeLists.txt links one), so both directions are a hand-written
+// recursive-descent parser/serializer here, not a wrapped third-party
+// library the way real LDMud wraps json-c.
+namespace json {
+
+// Same type-name strings the "typeof" efun's own local lambda uses
+// (EfunTable.cpp, searched directly: that lambda is not a shared,
+// reusable function, so this is its own small copy for the one error
+// message below that needs a value's type name, not a dependency on
+// that unrelated efun's own private implementation detail).
+const char* svalueTypeName(const Value& v) {
+    if (std::holds_alternative<int64_t>(v.data)) return "int";
+    if (std::holds_alternative<double>(v.data)) return "float";
+    if (std::holds_alternative<std::string>(v.data)) return "string";
+    if (std::holds_alternative<std::shared_ptr<LpcObject>>(v.data)) return "object";
+    if (std::holds_alternative<std::shared_ptr<Array>>(v.data)) return "array";
+    if (std::holds_alternative<std::shared_ptr<Mapping>>(v.data)) return "mapping";
+    if (std::holds_alternative<std::shared_ptr<Closure>>(v.data)) return "function";
+    if (std::holds_alternative<std::shared_ptr<Buffer>>(v.data)) return "buffer";
+    return "int";
+}
+
+void appendUtf8CodePoint(std::string& out, unsigned int cp) {
+    if (cp <= 0x7F) {
+        out += static_cast<char>(cp);
+    } else if (cp <= 0x7FF) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0xFFFF) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+void appendEscapedString(std::string& out, const std::string& s) {
+    out += '"';
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    out += '"';
+}
+
+void serializeValue(const Value& v, std::string& out) {
+    if (auto* i = std::get_if<int64_t>(&v.data)) {
+        out += std::to_string(*i);
+    } else if (auto* d = std::get_if<double>(&v.data)) {
+        // A JSON number with neither "." nor an exponent round-trips
+        // back through json_parse() as an int, not a float (real
+        // LDMud's own doc comment: "<double> -> float" the other
+        // direction only holds if the text actually looks like one).
+        // snprintf's own "%.17g" (round-trip-safe precision for a
+        // double) can still produce a plain-integer-looking string for
+        // a whole-number float (e.g. "3"), so this appends ".0" itself
+        // whenever neither marker is already present, to preserve the
+        // float/int distinction across a real round trip.
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.17g", *d);
+        std::string numStr(buf);
+        if (numStr.find('.') == std::string::npos &&
+            numStr.find('e') == std::string::npos &&
+            numStr.find('E') == std::string::npos &&
+            numStr.find("inf") == std::string::npos &&
+            numStr.find("nan") == std::string::npos) {
+            numStr += ".0";
+        }
+        out += numStr;
+    } else if (auto* s = std::get_if<std::string>(&v.data)) {
+        appendEscapedString(out, *s);
+    } else if (auto* arr = std::get_if<std::shared_ptr<Array>>(&v.data)) {
+        out += '[';
+        bool first = true;
+        for (const auto& item : (*arr)->items) {
+            if (!first) out += ',';
+            first = false;
+            serializeValue(item, out);
+        }
+        out += ']';
+    } else if (auto* m = std::get_if<std::shared_ptr<Mapping>>(&v.data)) {
+        // Real errorf() text quoted directly (pkg-json.c's own
+        // ldmud_json_serialize()/ldmud_json_walker()), not paraphrased,
+        // so a mudlib author hitting either sees the same message real
+        // LDMud would show.
+        if ((*m)->width != 1) {
+            throw LpcRuntimeError(
+                "json_serialize(): can only serialize mappings with width 1.");
+        }
+        out += '{';
+        bool first = true;
+        for (const auto& [key, val] : (*m)->entries) {
+            if (!std::holds_alternative<std::string>(key.data)) {
+                throw LpcRuntimeError(
+                    "json_serialize(): JSON supports only string keys, but got: " +
+                    std::string(svalueTypeName(key)));
+            }
+            if (!first) out += ',';
+            first = false;
+            appendEscapedString(out, std::get<std::string>(key.data));
+            out += ':';
+            serializeValue(val, out);
+        }
+        out += '}';
+    } else {
+        throw LpcRuntimeError(
+            "json_serialize(): value of this type cannot be serialized to JSON.");
+    }
+}
+
+void skipWhitespace(const std::string& s, size_t& pos) {
+    while (pos < s.size() &&
+           (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\n' || s[pos] == '\r')) {
+        ++pos;
+    }
+}
+
+std::string parseStringLiteral(const std::string& s, size_t& pos) {
+    // Caller already confirmed s[pos] == '"'.
+    ++pos;
+    std::string out;
+    while (pos < s.size() && s[pos] != '"') {
+        char c = s[pos];
+        if (c == '\\') {
+            ++pos;
+            if (pos >= s.size()) throw LpcRuntimeError("json_parse(): unterminated escape sequence.");
+            char e = s[pos];
+            switch (e) {
+                case '"': out += '"'; break;
+                case '\\': out += '\\'; break;
+                case '/': out += '/'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case 'u': {
+                    if (pos + 4 >= s.size()) {
+                        throw LpcRuntimeError("json_parse(): truncated \\u escape.");
+                    }
+                    unsigned int cp;
+                    try {
+                        cp = static_cast<unsigned int>(std::stoul(s.substr(pos + 1, 4), nullptr, 16));
+                    } catch (const std::exception&) {
+                        throw LpcRuntimeError("json_parse(): invalid \\u escape.");
+                    }
+                    pos += 4;
+                    // A high surrogate (0xD800-0xDBFF) must be followed
+                    // by a low surrogate (0xDC00-0xDFFF) to form one
+                    // real code point above the BMP; combine them per
+                    // the standard UTF-16 surrogate-pair formula if so.
+                    // A lone surrogate (either half with no valid
+                    // partner) is encoded as-is rather than rejected -
+                    // this driver has no strict-UTF-8 validation
+                    // elsewhere either, so leniency here matches.
+                    if (cp >= 0xD800 && cp <= 0xDBFF && pos + 6 < s.size() &&
+                        s[pos + 1] == '\\' && s[pos + 2] == 'u') {
+                        unsigned int low;
+                        try {
+                            low = static_cast<unsigned int>(std::stoul(s.substr(pos + 3, 4), nullptr, 16));
+                        } catch (const std::exception&) {
+                            low = 0;
+                        }
+                        if (low >= 0xDC00 && low <= 0xDFFF) {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                            pos += 6;
+                        }
+                    }
+                    appendUtf8CodePoint(out, cp);
+                    break;
+                }
+                default:
+                    throw LpcRuntimeError("json_parse(): invalid escape character.");
+            }
+            ++pos;
+        } else {
+            out += c;
+            ++pos;
+        }
+    }
+    if (pos >= s.size()) throw LpcRuntimeError("json_parse(): unterminated string.");
+    ++pos; // closing quote
+    return out;
+}
+
+Value parseValueAt(const std::string& s, size_t& pos) {
+    skipWhitespace(s, pos);
+    if (pos >= s.size()) throw LpcRuntimeError("json_parse(): unexpected end of input.");
+    char c = s[pos];
+    if (c == '"') {
+        return Value(parseStringLiteral(s, pos));
+    }
+    if (c == '{') {
+        ++pos;
+        auto m = std::make_shared<Mapping>();
+        skipWhitespace(s, pos);
+        if (pos < s.size() && s[pos] == '}') { ++pos; return Value(m); }
+        for (;;) {
+            skipWhitespace(s, pos);
+            if (pos >= s.size() || s[pos] != '"') {
+                throw LpcRuntimeError("json_parse(): expected a string key.");
+            }
+            std::string key = parseStringLiteral(s, pos);
+            skipWhitespace(s, pos);
+            if (pos >= s.size() || s[pos] != ':') {
+                throw LpcRuntimeError("json_parse(): expected ':' after object key.");
+            }
+            ++pos;
+            Value val = parseValueAt(s, pos);
+            m->entries.emplace_back(Value(key), std::move(val));
+            skipWhitespace(s, pos);
+            if (pos < s.size() && s[pos] == ',') { ++pos; continue; }
+            if (pos < s.size() && s[pos] == '}') { ++pos; break; }
+            throw LpcRuntimeError("json_parse(): expected ',' or '}' in object.");
+        }
+        return Value(m);
+    }
+    if (c == '[') {
+        ++pos;
+        auto arr = std::make_shared<Array>();
+        skipWhitespace(s, pos);
+        if (pos < s.size() && s[pos] == ']') { ++pos; return Value(arr); }
+        for (;;) {
+            arr->items.push_back(parseValueAt(s, pos));
+            skipWhitespace(s, pos);
+            if (pos < s.size() && s[pos] == ',') { ++pos; continue; }
+            if (pos < s.size() && s[pos] == ']') { ++pos; break; }
+            throw LpcRuntimeError("json_parse(): expected ',' or ']' in array.");
+        }
+        return Value(arr);
+    }
+    if (s.compare(pos, 4, "true") == 0) { pos += 4; return Value(int64_t{1}); }
+    if (s.compare(pos, 5, "false") == 0) { pos += 5; return Value(int64_t{0}); }
+    if (s.compare(pos, 4, "null") == 0) { pos += 4; return Value(int64_t{0}); }
+    if (c == '-' || (c >= '0' && c <= '9')) {
+        size_t start = pos;
+        if (s[pos] == '-') ++pos;
+        while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) ++pos;
+        bool isFloat = false;
+        if (pos < s.size() && s[pos] == '.') {
+            isFloat = true;
+            ++pos;
+            while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) ++pos;
+        }
+        if (pos < s.size() && (s[pos] == 'e' || s[pos] == 'E')) {
+            isFloat = true;
+            ++pos;
+            if (pos < s.size() && (s[pos] == '+' || s[pos] == '-')) ++pos;
+            while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) ++pos;
+        }
+        std::string numStr = s.substr(start, pos - start);
+        try {
+            if (isFloat) return Value(std::stod(numStr));
+            return Value(static_cast<int64_t>(std::stoll(numStr)));
+        } catch (const std::exception&) {
+            throw LpcRuntimeError("json_parse(): malformed number literal.");
+        }
+    }
+    throw LpcRuntimeError("json_parse(): unexpected character in JSON input.");
+}
+
+Value parseTopLevel(const std::string& s) {
+    size_t pos = 0;
+    Value v = parseValueAt(s, pos);
+    skipWhitespace(s, pos);
+    if (pos != s.size()) {
+        throw LpcRuntimeError("json_parse(): trailing data after JSON value.");
+    }
+    return v;
+}
+
+} // namespace json
+
 } // namespace
 
 void registerCoreEfuns() {
@@ -5423,6 +5750,50 @@ void registerCoreEfuns() {
         if (!permitted) return Value{};
         ob->setHidden(!args.empty() && isTruthy(args[0]));
         return Value{};
+    });
+
+    // void set_notify_destruct(int) / int query_notify_destruct(object
+    // default: this_object()). ROADMAP.md row 2.31. Real current
+    // FluffOS (confirmed absent from temp/reference/fluffos-2.9-ds2.08
+    // entirely, same "genuinely new since 2.9" shape enable_wizard/
+    // wizardp above already are): src/packages/core/core.spec's own
+    // "void set_notify_destruct(int); int query_notify_destruct(object
+    // default: F__THIS_OBJECT);". Real f_set_notify_destruct()
+    // (efuns_main.cc), fetched live: "if (num == 1) current_object->
+    // flags |= O_NOTIFY_DESTRUCT; else if (num == 0) ... &= ~...; else
+    // error(...)" - a strict 0/1 check, not truthy/falsy coercion the
+    // way set_hide() above takes its own argument. Real
+    // f_query_notify_destruct() is a plain flag read on the given
+    // object, no interactivity requirement of its own (unlike
+    // enable_wizard() above). The flag itself is consumed by
+    // VM::destructObject() (see LpcObject.hpp's own notifyDestruct()
+    // comment for the full real citation of what it gates:
+    // simulate.cc's own destruct_object(), APPLY_ON_DESTRUCT).
+    t.registerEfun("set_notify_destruct", [](VM& vm, std::vector<Value>& args) -> Value {
+        auto ob = vm.currentObject();
+        if (!ob) return Value{};
+        if (args.empty() || !std::holds_alternative<int64_t>(args[0].data)) {
+            throw LpcRuntimeError("Bad argument 1 to set_notify_destruct()");
+        }
+        int64_t num = std::get<int64_t>(args[0].data);
+        if (num == 1) {
+            ob->setNotifyDestruct(true);
+        } else if (num == 0) {
+            ob->setNotifyDestruct(false);
+        } else {
+            throw LpcRuntimeError("Bad argument 1 to set_notify_destruct()");
+        }
+        return Value{};
+    });
+    t.registerEfun("query_notify_destruct", [](VM& vm, std::vector<Value>& args) -> Value {
+        std::shared_ptr<LpcObject> ob;
+        if (!args.empty() && std::holds_alternative<std::shared_ptr<LpcObject>>(args[0].data)) {
+            ob = std::get<std::shared_ptr<LpcObject>>(args[0].data);
+        } else {
+            ob = vm.currentObject();
+        }
+        if (!ob) return Value(static_cast<int64_t>(0));
+        return Value(static_cast<int64_t>(ob->notifyDestruct() ? 1 : 0));
     });
 
     // void enable_wizard(void) / disable_wizard(void) / int wizardp(object)
@@ -12288,6 +12659,42 @@ void registerCoreEfuns() {
             throw LpcRuntimeError("db_conv_string: expected a string argument");
         }
         return Value(DbRegistry::convString(std::get<std::string>(args[0].data)));
+    });
+
+    // ROADMAP.md row 2.17: json_parse()/json_serialize(), real LDMud
+    // efuns (see the json namespace's own comment above, right before
+    // registerCoreEfuns(), for the full citation and type-coverage
+    // detail). Gated to dialect "ldmud" the same way db_* is, real
+    // FluffOS having no JSON support at all to diverge from or match.
+    auto requireLdmudJsonDialect = [](VM& vm, const char* efunName) {
+        if (vm.config().dialect() != "ldmud") {
+            throw LpcRuntimeError(std::string(efunName) +
+                "(): not implemented under dialect '" + vm.config().dialect() +
+                "'. json_parse/json_serialize are real LDMud efuns "
+                "(src/pkg-json.c); real current FluffOS has no JSON "
+                "support at all to port instead, confirmed directly "
+                "(see docs/dev/STATUS.md).");
+        }
+    };
+
+    // mixed json_parse(string jsonstr)
+    t.registerEfun("json_parse", [requireLdmudJsonDialect](VM& vm, std::vector<Value>& args) -> Value {
+        requireLdmudJsonDialect(vm, "json_parse");
+        if (args.empty() || !std::holds_alternative<std::string>(args[0].data)) {
+            throw LpcRuntimeError("json_parse(): expected a string argument.");
+        }
+        return json::parseTopLevel(std::get<std::string>(args[0].data));
+    });
+
+    // string json_serialize(mixed value)
+    t.registerEfun("json_serialize", [requireLdmudJsonDialect](VM& vm, std::vector<Value>& args) -> Value {
+        requireLdmudJsonDialect(vm, "json_serialize");
+        if (args.empty()) {
+            throw LpcRuntimeError("json_serialize(): expected a value argument.");
+        }
+        std::string out;
+        json::serializeValue(args[0], out);
+        return Value(out);
     });
 
     // ROADMAP.md row 2.22: LPC-native test runner. assert_equal,

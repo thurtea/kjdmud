@@ -849,7 +849,32 @@ std::shared_ptr<LpcObject> VM::cloneObject(const std::string& filename,
 
 void VM::destructObject(const std::shared_ptr<LpcObject>& obj,
                          const std::function<void(const std::shared_ptr<LpcObject>&)>& onDestructed) {
-    objects_.destructObject(obj, onDestructed);
+    // Real simulate.cc destruct_object(): "if (ob->flags &
+    // O_NOTIFY_DESTRUCT) { ... safe_apply(APPLY_ON_DESTRUCT, ob, 0,
+    // ORIGIN_DRIVER); ... }" fires first, before any other part of
+    // destruction runs, and any error the apply itself throws is
+    // swallowed (real code: caught, context restored, destruction
+    // proceeds regardless - confirmed directly, not assumed). Only
+    // ObjectManager::destructObject() knows the full shadow-chain
+    // cascade (a top-level destruct can fan out into several real
+    // destructions), and it has no VM access to fire an apply with; its
+    // own existing onDestructed callback is already threaded through
+    // every object in that cascade (its own "close_referencing_sockets"
+    // comment), so wrapping it here at the one call site that actually
+    // has a VM covers the cascade case too, without changing
+    // ObjectManager's own signature at all.
+    auto withOnDestructApply = [this, onDestructed](const std::shared_ptr<LpcObject>& destructedObj) {
+        if (destructedObj->notifyDestruct()) {
+            try {
+                callFunction(destructedObj, "on_destruct", {});
+            } catch (const std::exception&) {
+                // Swallowed, matching real code's own "proceed with
+                // destruction even if there is an error" comment.
+            }
+        }
+        if (onDestructed) onDestructed(destructedObj);
+    };
+    objects_.destructObject(obj, withOnDestructApply);
 }
 
 void VM::reloadObject(const std::shared_ptr<LpcObject>& obj,

@@ -24,6 +24,9 @@ The language core works. Driver-side capabilities already landed:
   not a driver gap
 - `save_object` FluffOS `.o` write-side
 - Net efun sidecar (`src/efun/NetEfuns.cpp`)
+- `json_parse`/`json_serialize` (real LDMud efuns, dialect-gated to
+  `"ldmud"` the same way `db_*` already is; real FluffOS has no JSON
+  support to diverge from)
 
 Build: CMake 3.20+, C++20, PCRE2, libcrypt, SQLite, OpenSSL. See
 `INSTALL.md`. Run: `./build/kjdmud etc/driver.cfg` (or `make build` /
@@ -75,16 +78,15 @@ FluffOS citation sources for development stay under gitignored `temp/`.
 `query_ip_port` returns the connection accept port under multi-port
 `listen:`.
 
-## Verification note (2026-09-22)
+## Verification note (2026-09-22, updated same day)
 
-This machine's own vendored `temp/` is absent, but network access to
-clone a fresh copy of real upstream FluffOS for a one-off verification
-pass is available and was used for the MSP row and, independently
-re-verified rather than trusted from that prior summary, the ZMP row
-(`docs/dev/STATUS.md` 2026-09-22 entries for both) - deleted again after
-each use, never vendored into this repo. Do this before assuming a
-not-in-any-driver-source disclaimer is warranted for a new protocol/efun
-row: that same pass corrected three previous entries (GMCP/MSDP/MSSP)
+Earlier the same day: this machine's own vendored `temp/` was absent,
+but network access to clone a fresh copy of real upstream FluffOS for a
+one-off verification pass was available and was used for the MSP row
+and, independently re-verified rather than trusted from that prior
+summary, the ZMP row (`docs/dev/STATUS.md` 2026-09-22 entries for both)
+- deleted again after each use, never vendored into this repo at that
+point. That same pass corrected three previous entries (GMCP/MSDP/MSSP)
 that had shipped on a "public protocol, no driver to cite" assumption
 made only because no source was checked at the time, not because none
 exists, and `docs/COMPARISON.md` row 2.32's own "not in `src/proto/
@@ -95,6 +97,23 @@ now fully closed (GMCP/MSDP/MSSP/MXP landed, MTTS confirmed already
 driver-complete), and MSP/ZMP have landed beyond that file's original
 scope too; the next protocol-shaped gap, if any, would be outside that
 file's own original scope the same way MSP/ZMP were.
+
+**Update, same day:** "this machine's own vendored temp/ is absent" is
+no longer true. The user's own local machine holds
+`/home/thurtea/Documents/backups/amlp/temp/` - the "amlp" predecessor
+project's full backup, including the exact `reference/
+fluffos-2.9-ds2.08/` tree this repo's citations have always meant and a
+second real corpus, `ds3.8.2_extracted/ds3.8.2/fluffos-2.23-ds03/`.
+Both copied into this repo's own gitignored `temp/` this session (see
+`docs/dev/STATUS.md`'s own dated entry). Prefer citing that restored
+`temp/reference/fluffos-2.9-ds2.08/` directly for any real-FluffOS
+verification going forward - it is the exact pinned source this
+project's own historical citations were made against, not a
+current-upstream tree that could in principle have drifted since. A
+fresh clone (of FluffOS, LDMud, or anything else not already under
+`temp/`) is still the right move for anything genuinely not vendored
+there, same as this session already did twice for real LDMud (no
+`temp/ldmud/` exists even after this restoration).
 
 A second, separate finding surfaced re-verifying ZMP rather than trusted
 from the prior session's own summary - real `GMCP`/`MSDP` each also have

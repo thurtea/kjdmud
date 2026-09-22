@@ -131,9 +131,8 @@ directory with any static server, for example:
 python3 -m http.server 8080 --directory website
 ```
 
-then open `http://127.0.0.1:8080/client.html`. After GitHub Pages is
-enabled for this repository, the same client is also at
-`https://thurtea.github.io/kjdmud/client.html`.
+then open `http://127.0.0.1:8080/client.html`. The same client is also
+hosted at `https://thurtea.com/kjdmud/client.html`.
 
 The older path `mudlib/www/client.html` only redirects to
 `website/client.html`.

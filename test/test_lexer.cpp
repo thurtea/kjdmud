@@ -30631,6 +30631,392 @@ static void testAllSevenDbEfunsThrowTheDialectGateUnderFluffosAndDgd() {
     std::cout << "testAllSevenDbEfunsThrowTheDialectGateUnderFluffosAndDgd OK\n";
 }
 
+// ROADMAP.md row 2.17: json_parse()/json_serialize(), real LDMud efuns
+// (src/pkg-json.c, confirmed against a fresh clone of current upstream
+// ldmud/ldmud - see EfunTable.cpp's own json namespace comment for the
+// full citation). Same "dgd falls through to the else-branch gate the
+// same as fluffos" dialect-gating shape testAllSevenDbEfunsThrowThe
+// DialectGateUnderFluffosAndDgd above already covers for db_*.
+
+static void testJsonSerializeAndParseRoundTripEveryScalarAndContainerType() {
+    ObjectVarHarness harness("dialect: ldmud\n");
+    harness.writeFile("/unused.c",
+        "void create() {}\n"
+        "int privilege_violation(string what, mixed who, mixed arg) { return 1; }\n");
+    assert(harness.objects.loadMasterObject());
+    harness.writeFile("/json_probe.c",
+        "string ser_int() { return json_serialize(42); }\n"
+        "string ser_neg() { return json_serialize(-7); }\n"
+        "string ser_float() { return json_serialize(3.5); }\n"
+        // A whole-number float must still serialize with a decimal
+        // point (real LDMud round-trips <double> -> float; a plain
+        // "3" would parse back as an int instead, see EfunTable.cpp's
+        // own serializeValue() comment on this exact point).
+        "string ser_whole_float() { return json_serialize(3.0); }\n"
+        "string ser_string() { return json_serialize(\"hi \\\"there\\\"\\n\"); }\n"
+        "string ser_array() { return json_serialize(({ 1, \"two\", 3.0 })); }\n"
+        "string ser_mapping() { return json_serialize(([ \"a\": 1, \"b\": \"c\" ])); }\n"
+        "mixed rt_int() { return json_parse(json_serialize(42)); }\n"
+        "mixed rt_float() { return json_parse(json_serialize(3.5)); }\n"
+        "mixed rt_whole_float() { return json_parse(json_serialize(3.0)); }\n"
+        "mixed rt_string() { return json_parse(json_serialize(\"round trip\")); }\n"
+        "mixed rt_array() { return json_parse(json_serialize(({ 1, 2, 3 }))); }\n"
+        "mixed rt_mapping() { return json_parse(json_serialize(([ \"x\": 1, \"y\": 2 ]))); }\n"
+        "mixed parse_null() { return json_parse(\"null\"); }\n"
+        "mixed parse_true() { return json_parse(\"true\"); }\n"
+        "mixed parse_false() { return json_parse(\"false\"); }\n"
+        "mixed parse_nested() { return json_parse(\"{\\\"a\\\":[1,2,{\\\"b\\\":3}]}\"); }\n");
+    auto ob = harness.objects.cloneObject("/json_probe");
+    assert(ob != nullptr);
+
+    assert(std::get<std::string>(harness.vm.callFunction(ob, "ser_int", {}).data) == "42");
+    assert(std::get<std::string>(harness.vm.callFunction(ob, "ser_neg", {}).data) == "-7");
+    assert(std::get<std::string>(harness.vm.callFunction(ob, "ser_float", {}).data) == "3.5");
+    std::string wholeFloat = std::get<std::string>(harness.vm.callFunction(ob, "ser_whole_float", {}).data);
+    assert(wholeFloat.find('.') != std::string::npos);
+
+    std::string serStr = std::get<std::string>(harness.vm.callFunction(ob, "ser_string", {}).data);
+    assert(serStr == "\"hi \\\"there\\\"\\n\"");
+
+    std::string serArr = std::get<std::string>(harness.vm.callFunction(ob, "ser_array", {}).data);
+    assert(serArr == "[1,\"two\",3.0]");
+
+    std::string serMap = std::get<std::string>(harness.vm.callFunction(ob, "ser_mapping", {}).data);
+    assert(serMap == "{\"a\":1,\"b\":\"c\"}");
+
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "rt_int", {}).data) == 42);
+    assert(std::get<double>(harness.vm.callFunction(ob, "rt_float", {}).data) == 3.5);
+    kjdmud::Value rtWhole = harness.vm.callFunction(ob, "rt_whole_float", {});
+    assert(std::holds_alternative<double>(rtWhole.data));
+    assert(std::get<double>(rtWhole.data) == 3.0);
+    assert(std::get<std::string>(harness.vm.callFunction(ob, "rt_string", {}).data) == "round trip");
+
+    kjdmud::Value rtArr = harness.vm.callFunction(ob, "rt_array", {});
+    auto arr = std::get<std::shared_ptr<kjdmud::Array>>(rtArr.data);
+    assert(arr->items.size() == 3);
+    assert(std::get<int64_t>(arr->items[0].data) == 1);
+    assert(std::get<int64_t>(arr->items[2].data) == 3);
+
+    kjdmud::Value rtMap = harness.vm.callFunction(ob, "rt_mapping", {});
+    auto map = std::get<std::shared_ptr<kjdmud::Mapping>>(rtMap.data);
+    assert(map->entries.size() == 2);
+    assert(map->width == 1);
+
+    // JSON null/true/false all become LPC int (0, 1, 0), matching real
+    // LDMud's own documented json_parse() type table exactly.
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "parse_null", {}).data) == 0);
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "parse_true", {}).data) == 1);
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "parse_false", {}).data) == 0);
+
+    kjdmud::Value nested = harness.vm.callFunction(ob, "parse_nested", {});
+    auto nestedMap = std::get<std::shared_ptr<kjdmud::Mapping>>(nested.data);
+    assert(nestedMap->entries.size() == 1);
+    auto nestedArr = std::get<std::shared_ptr<kjdmud::Array>>(nestedMap->entries[0].second.data);
+    assert(nestedArr->items.size() == 3);
+    auto innerMap = std::get<std::shared_ptr<kjdmud::Mapping>>(nestedArr->items[2].data);
+    assert(std::get<int64_t>(innerMap->entries[0].second.data) == 3);
+
+    std::cout << "testJsonSerializeAndParseRoundTripEveryScalarAndContainerType OK\n";
+}
+
+static void testJsonParseHandlesStringEscapesAndUnicode() {
+    ObjectVarHarness harness("dialect: ldmud\n");
+    harness.writeFile("/unused.c",
+        "void create() {}\n"
+        "int privilege_violation(string what, mixed who, mixed arg) { return 1; }\n");
+    assert(harness.objects.loadMasterObject());
+    harness.writeFile("/json_escape_probe.c",
+        // \u0041 is 'A'; \u00e9 is Latin-1 e-acute (U+00E9), a real
+        // 2-byte UTF-8 case; \ud83d\ude00 is a real surrogate pair
+        // (U+1F600, GRINNING FACE), a real 4-byte UTF-8 case.
+        "string parse_basic_escapes() { return json_parse(\"\\\"a\\\\nb\\\\tc\\\"\"); }\n"
+        "string parse_u_bmp() { return json_parse(\"\\\"\\\\u0041\\\\u00e9\\\"\"); }\n"
+        "string parse_surrogate_pair() { return json_parse(\"\\\"\\\\ud83d\\\\ude00\\\"\"); }\n");
+    auto ob = harness.objects.cloneObject("/json_escape_probe");
+    assert(ob != nullptr);
+
+    std::string basic = std::get<std::string>(harness.vm.callFunction(ob, "parse_basic_escapes", {}).data);
+    assert(basic == "a\nb\tc");
+
+    std::string bmp = std::get<std::string>(harness.vm.callFunction(ob, "parse_u_bmp", {}).data);
+    // 'A' (1 byte) + U+00E9 (2-byte UTF-8: 0xC3 0xA9).
+    assert(bmp.size() == 3);
+    assert(static_cast<unsigned char>(bmp[0]) == 'A');
+    assert(static_cast<unsigned char>(bmp[1]) == 0xC3);
+    assert(static_cast<unsigned char>(bmp[2]) == 0xA9);
+
+    std::string emoji = std::get<std::string>(harness.vm.callFunction(ob, "parse_surrogate_pair", {}).data);
+    // U+1F600 as 4-byte UTF-8: 0xF0 0x9F 0x98 0x80.
+    assert(emoji.size() == 4);
+    assert(static_cast<unsigned char>(emoji[0]) == 0xF0);
+    assert(static_cast<unsigned char>(emoji[1]) == 0x9F);
+    assert(static_cast<unsigned char>(emoji[2]) == 0x98);
+    assert(static_cast<unsigned char>(emoji[3]) == 0x80);
+
+    std::cout << "testJsonParseHandlesStringEscapesAndUnicode OK\n";
+}
+
+static void testJsonParseRejectsMalformedInput() {
+    ObjectVarHarness harness("dialect: ldmud\n");
+    harness.writeFile("/unused.c",
+        "void create() {}\n"
+        "int privilege_violation(string what, mixed who, mixed arg) { return 1; }\n");
+    assert(harness.objects.loadMasterObject());
+    harness.writeFile("/json_malformed_probe.c",
+        "mixed p1() { return json_parse(\"{\\\"a\\\":}\"); }\n"    // missing value
+        "mixed p2() { return json_parse(\"[1,2\"); }\n"             // unterminated array
+        "mixed p3() { return json_parse(\"\\\"unterminated\"); }\n" // unterminated string
+        "mixed p4() { return json_parse(\"nul\"); }\n"              // truncated literal
+        "mixed p5() { return json_parse(\"123 456\"); }\n"          // trailing data
+        "mixed p6() { return json_parse(\"\"); }\n");               // empty input
+    auto ob = harness.objects.cloneObject("/json_malformed_probe");
+    assert(ob != nullptr);
+
+    for (const char* fn : {"p1", "p2", "p3", "p4", "p5", "p6"}) {
+        bool threw = false;
+        try {
+            harness.vm.callFunction(ob, fn, {});
+        } catch (const kjdmud::LpcRuntimeError&) {
+            threw = true;
+        }
+        assert(threw);
+    }
+
+    std::cout << "testJsonParseRejectsMalformedInput OK\n";
+}
+
+static void testJsonSerializeRejectsWidthGreaterThanOneAndNonStringKeysAndUnsupportedTypes() {
+    ObjectVarHarness harness("dialect: ldmud\n");
+    harness.writeFile("/unused.c",
+        "void create() {}\n"
+        "int privilege_violation(string what, mixed who, mixed arg) { return 1; }\n");
+    assert(harness.objects.loadMasterObject());
+    harness.writeFile("/json_reject_probe.c",
+        "string ser_int_key() { return json_serialize(([ 1: \"a\" ])); }\n"
+        "string ser_self() { return json_serialize(this_object()); }\n"
+        "string ser_given(mixed m) { return json_serialize(m); }\n");
+    auto ob = harness.objects.cloneObject("/json_reject_probe");
+    assert(ob != nullptr);
+
+    bool threwIntKey = false;
+    try {
+        harness.vm.callFunction(ob, "ser_int_key", {});
+    } catch (const kjdmud::LpcRuntimeError&) {
+        threwIntKey = true;
+    }
+    assert(threwIntKey);
+
+    bool threwObject = false;
+    try {
+        harness.vm.callFunction(ob, "ser_self", {});
+    } catch (const kjdmud::LpcRuntimeError&) {
+        threwObject = true;
+    }
+    assert(threwObject);
+
+    // Width > 1 mapping: no LPC literal syntax produces one (([...])
+    // always builds width 1), so this builds one directly in C++ via
+    // Mapping::appendEntry() (same helper the width>1 save_object
+    // regression tests elsewhere in this repo use) and hands it to
+    // ser_given(mixed) as a real call argument, exactly like passing
+    // any other C++-constructed Value into callFunction() elsewhere in
+    // this file.
+    auto wideMap = std::make_shared<kjdmud::Mapping>();
+    wideMap->width = 2;
+    wideMap->appendEntry(kjdmud::Value(std::string("k")),
+                          {kjdmud::Value(int64_t{1}), kjdmud::Value(int64_t{2})});
+    bool threwWidth = false;
+    try {
+        harness.vm.callFunction(ob, "ser_given", {kjdmud::Value(wideMap)});
+    } catch (const kjdmud::LpcRuntimeError&) {
+        threwWidth = true;
+    }
+    assert(threwWidth);
+
+    std::cout << "testJsonSerializeRejectsWidthGreaterThanOneAndNonStringKeysAndUnsupportedTypes OK\n";
+}
+
+static void testJsonEfunsThrowTheDialectGateUnderFluffosAndDgd() {
+    for (const char* dialectCfg : {"dialect: fluffos\n", "dialect: dgd\n", ""}) {
+        ObjectVarHarness harness(dialectCfg);
+        harness.writeFile("/unused.c",
+            "void create() {}\n"
+            "int privilege_violation(string what, mixed who, mixed arg) { return 1; }\n");
+        assert(harness.objects.loadMasterObject());
+        harness.writeFile("/json_gate_probe.c",
+            "mixed do_parse() { return json_parse(\"1\"); }\n"
+            "string do_serialize() { return json_serialize(1); }\n");
+        auto ob = harness.objects.cloneObject("/json_gate_probe");
+        assert(ob != nullptr);
+
+        for (const char* fn : {"do_parse", "do_serialize"}) {
+            bool threw = false;
+            try {
+                harness.vm.callFunction(ob, fn, {});
+            } catch (const kjdmud::LpcRuntimeError&) {
+                threw = true;
+            }
+            assert(threw);
+        }
+    }
+
+    std::cout << "testJsonEfunsThrowTheDialectGateUnderFluffosAndDgd OK\n";
+}
+
+// ROADMAP.md row 2.31: set_notify_destruct()/query_notify_destruct(),
+// verified against current upstream FluffOS (src/packages/core/
+// efuns_main.cc's own f_set_notify_destruct()/f_query_notify_destruct(),
+// and simulate.cc's own destruct_object() for the APPLY_ON_DESTRUCT
+// consumer side - see LpcObject.hpp's own notifyDestruct() comment for
+// the full citation).
+
+static void testSetAndQueryNotifyDestructFlagRoundTrip() {
+    // VM::callFunction() resolves LPC-defined functions only, it does
+    // not fall back to the efun table the way a real bare in-source
+    // call would (see VM.cpp's own callFunction() comment on that
+    // deliberate divergence). Every efun this test calls from C++ is
+    // reached through a tiny LPC wrapper for that reason, matching this
+    // whole file's own established convention elsewhere (e.g. the ZMP/
+    // MSP efun tests in test_net.cpp).
+    ObjectVarHarness harness;
+    harness.writeFile("/nd_probe.c",
+        "void set_it(int v) { set_notify_destruct(v); }\n"
+        "int query_self() { return query_notify_destruct(); }\n"
+        "int query_of(object o) { return query_notify_destruct(o); }\n");
+    auto ob = harness.objects.cloneObject("/nd_probe");
+    assert(ob != nullptr);
+
+    // Default is unset (real object_t's flags start at 0).
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "query_self", {}).data) == 0);
+    assert(std::get<int64_t>(
+        harness.vm.callFunction(ob, "query_of", {kjdmud::Value(ob)}).data) == 0);
+
+    harness.vm.callFunction(ob, "set_it", {kjdmud::Value(int64_t{1})});
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "query_self", {}).data) == 1);
+    assert(std::get<int64_t>(
+        harness.vm.callFunction(ob, "query_of", {kjdmud::Value(ob)}).data) == 1);
+
+    harness.vm.callFunction(ob, "set_it", {kjdmud::Value(int64_t{0})});
+    assert(std::get<int64_t>(harness.vm.callFunction(ob, "query_self", {}).data) == 0);
+
+    std::cout << "testSetAndQueryNotifyDestructFlagRoundTrip OK\n";
+}
+
+static void testSetNotifyDestructRejectsValuesOtherThanZeroOrOne() {
+    ObjectVarHarness harness;
+    harness.writeFile("/nd_bad_probe.c",
+        "void set_it(int v) { set_notify_destruct(v); }\n");
+    auto ob = harness.objects.cloneObject("/nd_bad_probe");
+    assert(ob != nullptr);
+
+    for (int64_t bad : {int64_t{2}, int64_t{-1}, int64_t{42}}) {
+        bool threw = false;
+        try {
+            harness.vm.callFunction(ob, "set_it", {kjdmud::Value(bad)});
+        } catch (const kjdmud::LpcRuntimeError&) {
+            threw = true;
+        }
+        assert(threw);
+    }
+
+    std::cout << "testSetNotifyDestructRejectsValuesOtherThanZeroOrOne OK\n";
+}
+
+static void testOnDestructFiresOnlyWhenNotifyDestructIsSet() {
+    ObjectVarHarness harness;
+    harness.writeFile("/nd_observer.c",
+        "int notified = 0;\n"
+        "void mark_notified() { notified = 1; }\n"
+        "int was_notified() { return notified; }\n");
+    harness.writeFile("/nd_target_with_flag.c",
+        "object observer;\n"
+        "void set_observer(object o) { observer = o; }\n"
+        "void set_it(int v) { set_notify_destruct(v); }\n"
+        "void on_destruct() { if (observer) observer->mark_notified(); }\n");
+    harness.writeFile("/nd_target_without_flag.c",
+        "object observer;\n"
+        "void set_observer(object o) { observer = o; }\n"
+        "void on_destruct() { if (observer) observer->mark_notified(); }\n");
+
+    // Positive case: notify_destruct set, on_destruct must fire before
+    // the object is actually gone.
+    {
+        auto observer = harness.objects.cloneObject("/nd_observer");
+        auto target = harness.objects.cloneObject("/nd_target_with_flag");
+        assert(observer && target);
+        harness.vm.callFunction(target, "set_observer", {kjdmud::Value(observer)});
+        harness.vm.callFunction(target, "set_it", {kjdmud::Value(int64_t{1})});
+        assert(!target->isDestructed());
+
+        harness.vm.destructObject(target, nullptr);
+
+        assert(target->isDestructed());
+        assert(std::get<int64_t>(harness.vm.callFunction(observer, "was_notified", {}).data) == 1);
+    }
+
+    // Negative case: same real apply exists on the object (on_destruct
+    // is defined), but notify_destruct was never set - real code's own
+    // "if (ob->flags & O_NOTIFY_DESTRUCT)" guard must skip firing it.
+    {
+        auto observer = harness.objects.cloneObject("/nd_observer");
+        auto target = harness.objects.cloneObject("/nd_target_without_flag");
+        assert(observer && target);
+        harness.vm.callFunction(target, "set_observer", {kjdmud::Value(observer)});
+
+        harness.vm.destructObject(target, nullptr);
+
+        assert(target->isDestructed());
+        assert(std::get<int64_t>(harness.vm.callFunction(observer, "was_notified", {}).data) == 0);
+    }
+
+    std::cout << "testOnDestructFiresOnlyWhenNotifyDestructIsSet OK\n";
+}
+
+static void testOnDestructErrorIsSwallowedAndDestructionStillProceeds() {
+    ObjectVarHarness harness;
+    harness.writeFile("/nd_throws_probe.c",
+        "void set_it(int v) { set_notify_destruct(v); }\n"
+        "void on_destruct() { object x; x->nonexistent_call(); }\n");
+    auto ob = harness.objects.cloneObject("/nd_throws_probe");
+    assert(ob != nullptr);
+    harness.vm.callFunction(ob, "set_it", {kjdmud::Value(int64_t{1})});
+
+    // Real destruct_object()'s own comment: "Proceed with destruction
+    // even if there is an error in the destructing() function in the
+    // mudlib." destructObject() itself must not throw or abort even
+    // though on_destruct()'s own body does.
+    harness.vm.destructObject(ob, nullptr);
+    assert(ob->isDestructed());
+
+    std::cout << "testOnDestructErrorIsSwallowedAndDestructionStillProceeds OK\n";
+}
+
+static void testDestructEfunFiresOnDestructThroughTheRealEfunCallPath() {
+    ObjectVarHarness harness;
+    harness.writeFile("/nd_observer2.c",
+        "int notified = 0;\n"
+        "void mark_notified() { notified = 1; }\n"
+        "int was_notified() { return notified; }\n");
+    harness.writeFile("/nd_via_efun.c",
+        "object observer;\n"
+        "void set_observer(object o) { observer = o; }\n"
+        "void arm() { set_notify_destruct(1); }\n"
+        "void on_destruct() { if (observer) observer->mark_notified(); }\n"
+        "void self_destruct() { destruct(this_object()); }\n");
+    auto observer = harness.objects.cloneObject("/nd_observer2");
+    auto target = harness.objects.cloneObject("/nd_via_efun");
+    assert(observer && target);
+    harness.vm.callFunction(target, "set_observer", {kjdmud::Value(observer)});
+    harness.vm.callFunction(target, "arm", {});
+
+    harness.vm.callFunction(target, "self_destruct", {});
+
+    assert(target->isDestructed());
+    assert(std::get<int64_t>(harness.vm.callFunction(observer, "was_notified", {}).data) == 1);
+
+    std::cout << "testDestructEfunFiresOnDestructThroughTheRealEfunCallPath OK\n";
+}
+
 // ROADMAP.md row 2.5's own first slice (C++20 coroutine scheduler).
 // Real row 2.6 async/await grammar does not exist yet. No async/await
 // token appears anywhere under src/compiler, confirmed directly. so
@@ -32733,6 +33119,16 @@ int main() {
     testDbExecOnAnUnknownHandleThrowsIllegalHandle();
     testDbConnectThrowsCleanlyUnderFluffosDialectInsteadOfSilentlyMisinterpretingArguments();
     testAllSevenDbEfunsThrowTheDialectGateUnderFluffosAndDgd();
+    testJsonSerializeAndParseRoundTripEveryScalarAndContainerType();
+    testJsonParseHandlesStringEscapesAndUnicode();
+    testJsonParseRejectsMalformedInput();
+    testJsonSerializeRejectsWidthGreaterThanOneAndNonStringKeysAndUnsupportedTypes();
+    testJsonEfunsThrowTheDialectGateUnderFluffosAndDgd();
+    testSetAndQueryNotifyDestructFlagRoundTrip();
+    testSetNotifyDestructRejectsValuesOtherThanZeroOrOne();
+    testOnDestructFiresOnlyWhenNotifyDestructIsSet();
+    testOnDestructErrorIsSwallowedAndDestructionStillProceeds();
+    testDestructEfunFiresOnDestructThroughTheRealEfunCallPath();
     testAsyncFunctionSuspendsOnAwaitAndResumesWithLocalStatePreserved();
     testOrdinarySynchronousFunctionUnaffectedByAsyncMachineryExistingInTheSameBinary();
     testAwaitReachedThroughANestedPlainCallPropagatesSuspendCorrectly();
