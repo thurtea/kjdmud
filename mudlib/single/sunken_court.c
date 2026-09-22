@@ -21,8 +21,7 @@ long()
 {
     return
         "A sunken court, ankle-deep in stagnant water. Wooden stall "
-        "frames stand in the water. A ladder leads north to the granary "
-        "loft.\n";
+        "frames stand in the water.\n";
 }
 
 int
@@ -35,7 +34,7 @@ void
 init()
 {
     if (this_player() && interactive(this_player())) {
-        write(long());
+        room::show_desc();
     }
     room::init();
 }

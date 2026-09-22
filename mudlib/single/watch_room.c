@@ -28,8 +28,7 @@ long()
 {
     return
         "A watch room above the gatehouse. Old Mabb is here, with a "
-        "bedroll, a cookfire, and a pile of gear. A rope-and-plank "
-        "bridge leads east to the granary loft.\n";
+        "bedroll, a cookfire, and a pile of gear.\n";
 }
 
 int
@@ -42,7 +41,7 @@ void
 init()
 {
     if (this_player() && interactive(this_player())) {
-        write(long());
+        room::show_desc();
     }
     room::init();
 }

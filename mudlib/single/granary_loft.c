@@ -33,7 +33,7 @@ void
 init()
 {
     if (this_player() && interactive(this_player())) {
-        write(long());
+        room::show_desc();
     }
     room::init();
 }

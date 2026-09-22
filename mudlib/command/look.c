@@ -4,7 +4,7 @@ int
 main(string arg)
 {
     object env, ob, *inv;
-    mapping exits, items;
+    mapping items;
     string desc;
     int i;
 
@@ -23,11 +23,8 @@ main(string arg)
             return 1;
         }
         write(desc);
-        if (function_exists("query_exits", env)) {
-            exits = env->query_exits();
-            if (exits && sizeof(exits)) {
-                write("Exits: " + env->exits_desc() + ".\n");
-            }
+        if (function_exists("exits_line", env)) {
+            write(env->exits_line());
         }
         inv = all_inventory(env);
         desc = "";

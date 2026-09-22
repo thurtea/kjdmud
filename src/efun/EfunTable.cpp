@@ -42,6 +42,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <zlib.h>
 
 namespace kjdmud {
 
@@ -4607,6 +4608,96 @@ void registerCoreEfuns() {
         }
         std::memcpy(dst.data() + start, payload.data(), payload.size());
         return Value(int64_t{1});
+    });
+
+    // buffer compress(string | buffer). Real src/packages/compress/
+    // compress.cc's own f_compress(): zlib compress() into a
+    // compressBound()-sized destination, shrunk to zlib's own actual
+    // output length afterward. A non-string/non-buffer argument returns
+    // undefined ("pop_n_elems(...); push_undefined(); return;"), not an
+    // error, matching real code exactly.
+    t.registerEfun("compress", [](VM&, std::vector<Value>& args) -> Value {
+        if (args.empty()) return Value{};
+        const unsigned char* input = nullptr;
+        size_t inputSize = 0;
+        if (auto* sp = std::get_if<std::string>(&args[0].data)) {
+            input = reinterpret_cast<const unsigned char*>(sp->data());
+            inputSize = sp->size();
+        } else if (auto* bp = std::get_if<std::shared_ptr<Buffer>>(&args[0].data)) {
+            if (*bp) {
+                input = (*bp)->bytes.data();
+                inputSize = (*bp)->bytes.size();
+            }
+        } else {
+            return Value{};
+        }
+
+        uLongf destLen = compressBound(static_cast<uLong>(inputSize));
+        std::vector<unsigned char> dest(destLen ? destLen : 1);
+        if (::compress(dest.data(), &destLen, input, static_cast<uLong>(inputSize)) != Z_OK) {
+            throw LpcRuntimeError("compress: zlib compress() failed");
+        }
+        dest.resize(destLen);
+        auto buf = std::make_shared<Buffer>();
+        buf->bytes = std::move(dest);
+        return Value(buf);
+    });
+
+    // buffer uncompress(buffer). Real compress.cc's own f_uncompress():
+    // a chunked zlib inflate() loop into a growable output buffer,
+    // erroring (real error(), mapped to this driver's own
+    // LpcRuntimeError throw, the same mapping every other efun in this
+    // table uses) both on a genuine zlib failure and when the
+    // decompressed size would exceed a sanity ceiling (real
+    // CONFIG_INT(__MAX_BUFFER_SIZE__) zip-bomb guard, added upstream
+    // specifically to stop an unbounded-size decompression bomb; this
+    // driver has no max_buffer_size config, the same "local stand-in
+    // constant" situation allocate_buffer()'s own comment above already
+    // documents, reused here at the same 256MB ceiling). A non-buffer
+    // argument returns undefined ("sp->type != T_BUFFER" branch), not
+    // an error, matching real code exactly.
+    t.registerEfun("uncompress", [](VM&, std::vector<Value>& args) -> Value {
+        auto* bp = args.empty() ? nullptr : std::get_if<std::shared_ptr<Buffer>>(&args[0].data);
+        if (!bp || !*bp) return Value{};
+        const std::vector<unsigned char>& input = (*bp)->bytes;
+
+        constexpr size_t kMaxDecompressedSize = 256 * 1024 * 1024;
+        constexpr size_t kChunkSize = 8096;
+
+        z_stream stream{};
+        stream.next_in = const_cast<Bytef*>(input.data());
+        stream.avail_in = static_cast<uInt>(input.size());
+        if (inflateInit(&stream) != Z_OK) {
+            throw LpcRuntimeError("uncompress: inflateInit failed");
+        }
+
+        std::vector<unsigned char> output;
+        unsigned char chunk[kChunkSize];
+        int ret = Z_OK;
+        do {
+            stream.next_out = chunk;
+            stream.avail_out = kChunkSize;
+            ret = inflate(&stream, 0);
+            if (ret != Z_OK && ret != Z_STREAM_END) {
+                break;
+            }
+            size_t produced = kChunkSize - stream.avail_out;
+            if (output.size() + produced > kMaxDecompressedSize) {
+                inflateEnd(&stream);
+                throw LpcRuntimeError("uncompress: decompressed data exceeds maximum buffer size");
+            }
+            output.insert(output.end(), chunk, chunk + produced);
+        } while (ret == Z_OK);
+
+        inflateEnd(&stream);
+
+        if (ret != Z_STREAM_END) {
+            throw LpcRuntimeError("uncompress: inflate: no ZSTREAM_END");
+        }
+
+        auto buf = std::make_shared<Buffer>();
+        buf->bytes = std::move(output);
+        return Value(buf);
     });
 
     // buffer to_buffer(string | buffer | mixed *) and its internal name

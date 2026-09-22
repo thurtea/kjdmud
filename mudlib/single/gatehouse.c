@@ -22,9 +22,7 @@ long()
 {
     return
         "A squat stone room with a cold hearth and a dusty worktable. "
-        "A wand of creation rests on the table. A stair leads north to "
-        "the watch room. An opening in the east wall leads to the "
-        "sunken court. A west gap opens toward the Chi-Town 'Burbs.\n"
+        "A wand of creation rests on the table.\n"
         "Type 'help' for the full list of runnable commands.\n";
 }
 
@@ -46,7 +44,7 @@ init()
         return;
     }
 
-    write(long());
+    room::show_desc();
 
     if (!present("wand", player)) {
         wand = clone_object(WAND_OB);

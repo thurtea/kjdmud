@@ -21578,6 +21578,68 @@ static void testBufferTypeAndCoreEfuns() {
     std::cout << "testBufferTypeAndCoreEfuns OK\n";
 }
 
+// buffer compress(string | buffer) / buffer uncompress(buffer). Real
+// src/packages/compress/compress.cc's own f_compress()/f_uncompress(),
+// verified against a fresh FluffOS clone (this repo's own vendored
+// temp/reference/fluffos-2.9-ds2.08/ predates the compress package
+// entirely, confirmed no "compress" hit anywhere under temp/ at all).
+// compress_file()/uncompress_file() (the gzFile-on-disk half of that
+// same real package) are out of scope here, this row's simpler
+// in-memory buffer<->buffer half only.
+
+static void testCompressAndUncompressRoundTripViaZlib() {
+    ObjectVarHarness harness;
+    harness.writeFile("/compress_probe.c",
+        "string c_str_rt() {\n"
+        "    mixed c = compress(\"hello hello hello hello hello\");\n"
+        "    mixed u = uncompress(c);\n"
+        "    return read_buffer(u, 0, sizeof(u));\n"
+        "}\n"
+        "int c_buf_rt_sz() {\n"
+        "    mixed b = to_buffer(\"round trip via buffer input\");\n"
+        "    mixed c = compress(b);\n"
+        "    mixed u = uncompress(c);\n"
+        "    return sizeof(u) == sizeof(b);\n"
+        "}\n"
+        "int c_smaller() {\n"
+        "    string input = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n"
+        "    return sizeof(compress(input)) < strlen(input);\n"
+        "}\n"
+        "int c_bad_type() { return undefinedp(compress(({1, 2, 3}))); }\n"
+        "int u_bad_type() { return undefinedp(uncompress(\"not a buffer\")); }\n"
+        "int u_bad_data() {\n"
+        "    mixed b = allocate_buffer(4);\n"
+        "    write_buffer(b, 0, 1094861636);\n"
+        "    return sizeof(uncompress(b));\n"
+        "}\n");
+    auto ob = harness.objects.cloneObject("/compress_probe");
+    assert(ob != nullptr);
+
+    auto callI = [&](const char* fn) -> int64_t {
+        kjdmud::Value r = harness.vm.callFunction(ob, fn, {});
+        assert(std::holds_alternative<int64_t>(r.data));
+        return std::get<int64_t>(r.data);
+    };
+    auto callS = [&](const char* fn) -> std::string {
+        kjdmud::Value r = harness.vm.callFunction(ob, fn, {});
+        assert(std::holds_alternative<std::string>(r.data));
+        return std::get<std::string>(r.data);
+    };
+    auto throws = [&](const char* fn) -> bool {
+        try { harness.vm.callFunction(ob, fn, {}); return false; }
+        catch (const kjdmud::LpcRuntimeError&) { return true; }
+    };
+
+    assert(callS("c_str_rt") == "hello hello hello hello hello");
+    assert(callI("c_buf_rt_sz") == 1);
+    assert(callI("c_smaller") == 1);
+    assert(callI("c_bad_type") == 1);
+    assert(callI("u_bad_type") == 1);
+    assert(throws("u_bad_data"));
+
+    std::cout << "testCompressAndUncompressRoundTripViaZlib OK\n";
+}
+
 static void testNextBitFindsFollowingSetBitWithRealBoundaryAsymmetry() {
     ObjectVarHarness harness;
     harness.writeFile("/nb_probe.c",
@@ -33047,6 +33109,7 @@ int main() {
     testReplaceStringOccurrenceRangeForm();
     testStrsrchIntNeedleAndBackwardFlag();
     testBufferTypeAndCoreEfuns();
+    testCompressAndUncompressRoundTripViaZlib();
     testNextBitFindsFollowingSetBitWithRealBoundaryAsymmetry();
     testElementOfReturnsAMemberOfTheArrayAndThrowsWhenEmpty();
     testShuffleReordersInPlaceAndKeepsSameElementsAndIdentity();

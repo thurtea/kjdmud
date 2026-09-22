@@ -136,3 +136,28 @@ string exits_desc() {
     }
     return out;
 }
+
+// exits_line: a standalone, bold-green "Exits: north, east." line (real
+// daemon/terminal.c's own ANSI(p)/ESC(p) macro convention, ported here
+// directly: sprintf("%c[" + p + "m", 27) builds a raw ESC (ASCII 27)
+// byte ahead of the ANSI code, confirmed against this driver's own
+// sprintf %c support. See EfunTable.cpp's own sprintf %c comment for
+// the citation). Empty string, not "Exits: none.", when this room has
+// no exits at all (matching look.c's own pre-existing "only print an
+// Exits line when there is at least one" guard, now centralized here).
+string exits_line() {
+    if (!room_exits || !sizeof(room_exits)) {
+        return "";
+    }
+    return sprintf("%c[1;32mExits: %s.%c[0m\n", 27, exits_desc(), 27);
+}
+
+// show_desc: the one real entry point both an entering player (each
+// concrete room's own init(), replacing a bare "write(long());") and
+// an explicit "look" (command/look.c) now go through, so both show the
+// same long() text plus the same colored exits_line() rather than two
+// slightly different hand-rolled versions of the same output.
+void show_desc() {
+    write(long());
+    write(exits_line());
+}
