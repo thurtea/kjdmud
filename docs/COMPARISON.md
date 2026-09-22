@@ -402,7 +402,9 @@ command, unlike real FluffOS's per-task recovery) was also fixed,
 | 2.29 | Done | `enable_wizard()`/`disable_wizard()`/`wizardp()`: wizard-flag efuns |
 | 2.30 | Done | `sys_network_ports()`: list active listening ports |
 | 2.31 | Open | `query_notify_destruct()`/`set_notify_destruct()`: destruct-notification efuns |
-| 2.32 | Open | GMCP/MSDP/MSP/ZMP/MXP telnet protocol extension efuns |
+| 2.32 | Open | MSP/ZMP telnet protocol extension efuns (not in `src/proto/instruct.md`'s own protocol set). MTTS is not actually open: real FluffOS's driver-level MTTS mechanism is exactly `request_term_type()`/`start_request_term_type()`/`terminal_type()`/`query_terminal_type()`, already present; the bitmask-parsing convention is genuinely mudlib-side, not a driver gap (`docs/dev/STATUS.md` 2026-09-22) |
+| 2.32a | Done | GMCP/MSDP/MSSP telnet protocol extension efuns |
+| 2.32b | Done | MXP telnet protocol extension efuns (`has_mxp`/`mxp_bold`/`mxp_color`/`mxp_link`) |
 | 2.33 | Open | UTF-8/charset conversion plus remaining buffer-type efuns |
 | 2.33a | Done | Buffer value type plus the dependency-free buffer efuns |
 | 2.34 | Open | `set_config(int, mixed)`: runtime-mutable driver config |

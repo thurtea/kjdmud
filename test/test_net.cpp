@@ -418,6 +418,169 @@ void testGmcpSubnegotiationIsQueued() {
     std::cout << "testGmcpSubnegotiationIsQueued OK\n";
 }
 
+void testEncodingAndMsdpEfunsOnASocketpair() {
+    NetHarness harness;
+    harness.writeFile("/msdp.c",
+        "int msdp() { return has_msdp(); }\n"
+        "void send_it() { send_msdp(\"ROOM_NAME\", \"Gatehouse\"); }\n");
+    auto obj = harness.objects.cloneObject("/msdp");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+    harness.vm.pushCommandGiver(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "msdp", {}).data) == 0);
+    conn.setMsdpEnabled(true);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "msdp", {}).data) == 1);
+
+    harness.vm.callFunction(obj, "send_it", {});
+    std::string wired = readAvailable(fds[1]);
+    assert(static_cast<unsigned char>(wired[0]) == 255);
+    assert(static_cast<unsigned char>(wired[1]) == 250);
+    assert(static_cast<unsigned char>(wired[2]) == 69);
+    assert(static_cast<unsigned char>(wired[3]) == 1);
+    assert(wired.find("ROOM_NAME") != std::string::npos);
+    assert(wired.find("Gatehouse") != std::string::npos);
+    assert(static_cast<unsigned char>(wired[wired.size() - 2]) == 255);
+    assert(static_cast<unsigned char>(wired[wired.size() - 1]) == 240);
+
+    harness.vm.popCommandGiver();
+    ::close(fds[1]);
+    std::cout << "testEncodingAndMsdpEfunsOnASocketpair OK\n";
+}
+
+// A client volunteering "IAC WILL MSDP" unprompted (no Server::
+// onNewConnection() proactive offer run first in this raw-socketpair
+// harness), same shape as testGmcpSubnegotiationIsQueued's own missing
+// negotiation. handleNegotiation()'s Will-branch reply-and-enable path
+// is what this covers; handleSubnegotiation() then queues the payload.
+void testMsdpSubnegotiationIsQueued() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    unsigned char sb[] = {
+        255, 250, 69, 1, 'R', 'O', 'O', 'M', '_', 'N', 'A', 'M', 'E',
+        2, 'G', 'a', 't', 'e', 'h', 'o', 'u', 's', 'e', 255, 240, '\n'};
+    assert(::write(fds[1], sb, sizeof(sb)) == static_cast<ssize_t>(sizeof(sb)));
+    auto lines = conn.pollLines();
+    assert(lines.size() == 1);
+    assert(lines[0].empty());
+    auto msdp = conn.takeIncomingMsdp();
+    assert(msdp.size() == 1);
+    assert(msdp[0].first == "ROOM_NAME");
+    assert(msdp[0].second == "Gatehouse");
+    assert(conn.msdpEnabled());
+    ::close(fds[1]);
+    std::cout << "testMsdpSubnegotiationIsQueued OK\n";
+}
+
+// The client's "IAC DO MSDP" reply to this driver's own proactive
+// "IAC WILL MSDP" (Server::onNewConnection()), same negotiation shape
+// MSSP's own test covers for its Do-branch, minus a fixed data block
+// to assert on since MSDP has none (see Connection::sendMsdp()'s own
+// comment: it sends arbitrary named variables, not one static block).
+// mxp_bold/mxp_color/mxp_link all take a required target object (see
+// NetEfuns.cpp's own connectionForRequiredObjectArg() comment), so this
+// mirrors testEncodingAndMsdpEfunsOnASocketpair's shape but passes the
+// interactive object itself as an explicit LPC-side argument rather than
+// relying on the current command_giver.
+void testMxpEfunsWrapTextOnlyWhenEnabled() {
+    NetHarness harness;
+    harness.writeFile("/mxp.c",
+        "int has(object ob) { return has_mxp(ob); }\n"
+        "string bold(object ob) { return mxp_bold(ob, \"loud\"); }\n"
+        "string color(object ob) { return mxp_color(ob, \"blood\", \"red\", \"black\"); }\n"
+        "string link(object ob) { return mxp_link(ob, \"north\", \"go north\"); }\n");
+    auto obj = harness.objects.cloneObject("/mxp");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    std::vector<kjdmud::Value> objArg{kjdmud::Value(obj)};
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", objArg).data) == 0);
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "bold", objArg).data) == "loud");
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "color", objArg).data) == "blood");
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "link", objArg).data) == "north");
+
+    conn.setMxpEnabled(true);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "has", objArg).data) == 1);
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "bold", objArg).data) == "<B>loud</B>");
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "color", objArg).data) ==
+           "<COLOR FORE=red BACK=black>blood</COLOR>");
+    assert(std::get<std::string>(harness.vm.callFunction(obj, "link", objArg).data) ==
+           "<SEND \"go north\">north</SEND>");
+
+    ::close(fds[1]);
+    std::cout << "testMxpEfunsWrapTextOnlyWhenEnabled OK\n";
+}
+
+// A client volunteering "IAC WILL MXP" unprompted, same shape as
+// testMsdpSubnegotiationIsQueued's own missing-negotiation setup:
+// handleNegotiation()'s Will-branch replies "IAC DO MXP" and enables
+// the flag, no subnegotiation payload involved (see Connection.hpp's
+// own mxpEnabled() comment on why there is nothing to parse for v1).
+void testMxpWillNegotiationRepliesDoAndSetsEnabledFlag() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char willMxp[] = {255, 251, 91};
+    assert(::write(fds[1], willMxp, sizeof(willMxp)) == static_cast<ssize_t>(sizeof(willMxp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.mxpEnabled());
+
+    std::string wired = readAvailable(fds[1]);
+    unsigned char expected[] = {255, 253, 91};
+    assert(wired == std::string(reinterpret_cast<char*>(expected), sizeof(expected)));
+
+    ::close(fds[1]);
+    std::cout << "testMxpWillNegotiationRepliesDoAndSetsEnabledFlag OK\n";
+}
+
+// The client's "IAC DO MXP" reply to this driver's own proactive
+// "IAC WILL MXP" (Server::onNewConnection()), same shape as
+// testMsdpDoReplySetsEnabledFlag just below.
+void testMxpDoReplySetsEnabledFlag() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char doMxp[] = {255, 253, 91};
+    assert(::write(fds[1], doMxp, sizeof(doMxp)) == static_cast<ssize_t>(sizeof(doMxp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.mxpEnabled());
+
+    ::close(fds[1]);
+    std::cout << "testMxpDoReplySetsEnabledFlag OK\n";
+}
+
+void testMsdpDoReplySetsEnabledFlag() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    unsigned char doMsdp[] = {255, 253, 69};
+    assert(::write(fds[1], doMsdp, sizeof(doMsdp)) == static_cast<ssize_t>(sizeof(doMsdp)));
+    auto lines = conn.pollLines();
+    assert(lines.empty());
+    assert(conn.msdpEnabled());
+
+    ::close(fds[1]);
+    std::cout << "testMsdpDoReplySetsEnabledFlag OK\n";
+}
+
 } // namespace
 
 // src/config/instruct.md Phase 0's own max_connections row.
@@ -495,4 +658,10 @@ void runNetTests() {
     testMaxConnectionsConfigKeyDefaultsTo256AndParsesCustomValue();
     testAtMaxConnectionsPredicateGatesExactlyAtTheConfiguredLimit();
     testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock();
+    testEncodingAndMsdpEfunsOnASocketpair();
+    testMsdpSubnegotiationIsQueued();
+    testMsdpDoReplySetsEnabledFlag();
+    testMxpEfunsWrapTextOnlyWhenEnabled();
+    testMxpWillNegotiationRepliesDoAndSetsEnabledFlag();
+    testMxpDoReplySetsEnabledFlag();
 }

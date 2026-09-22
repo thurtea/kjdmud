@@ -111,6 +111,45 @@ public:
     // dependency.
     void sendMssp(const std::string& mudName, int playerCount, int uptimeSeconds);
 
+    // Mud Server Data Protocol (telnet option 69/0x45). Unlike MSSP,
+    // MSDP is bidirectional (a real client sends REPORT/UNREPORT/LIST
+    // requests back, and the mudlib can send arbitrary named variables
+    // at any time), so it follows GMCP's shape, not MSSP's: a plain
+    // enabled flag plus a queued incoming list, both handled here in
+    // src/net rather than needing Server-only state the way sendMssp()'s
+    // own comment explains for that one-way protocol. v1 scope: single
+    // scalar MSDP_VAR/MSDP_VAL pairs only, no MSDP_TABLE/MSDP_ARRAY
+    // nesting (real spec section 3) since nothing in this driver has a
+    // structured value to report yet; the wire format leaves room to add
+    // that later without a shape change here.
+    bool msdpEnabled() const { return msdpEnabled_; }
+    void setMsdpEnabled(bool enabled) { msdpEnabled_ = enabled; }
+    void sendMsdp(const std::string& varName, const std::string& value);
+
+    std::vector<std::pair<std::string, std::string>> takeIncomingMsdp() {
+        std::vector<std::pair<std::string, std::string>> out = std::move(incomingMsdp_);
+        incomingMsdp_.clear();
+        return out;
+    }
+
+    // MUD eXtension Protocol (telnet option 91/0x5B), same "not specific
+    // to any one real LP driver's own C source" provenance note as
+    // sendMssp()/sendMsdp() above: a public client protocol
+    // (zuggsoft.com/zmud/mxp.htm), no vendored reference driver present
+    // on disk to cite either way. v1 scope, matching src/proto/
+    // instruct.md's own sketch: negotiate the enabled flag (both a
+    // client-volunteered "IAC WILL MXP" and a reply to this driver's own
+    // proactive offer both set it, same two-branch shape GMCP/MSDP
+    // already use) and let src/proto/MxpHandler wrap text in the real
+    // <B>/<COLOR>/<SEND> elements when enabled, plain text otherwise.
+    // No incoming subnegotiation parsing: real MXP defines optional
+    // client VERSION/SUPPORT replies over SB 91, but nothing in this
+    // driver consumes them, so an incoming SB 91 payload is left to fall
+    // through handleSubnegotiation()'s existing unrecognized-option
+    // no-op rather than growing a parser with no reader.
+    bool mxpEnabled() const { return mxpEnabled_; }
+    void setMxpEnabled(bool enabled) { mxpEnabled_ = enabled; }
+
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
@@ -328,6 +367,9 @@ private:
     bool gmcpEnabled_ = false;
     std::vector<std::string> incomingGmcp_;
     bool msspNegotiated_ = false;
+    bool msdpEnabled_ = false;
+    std::vector<std::pair<std::string, std::string>> incomingMsdp_;
+    bool mxpEnabled_ = false;
     std::string inputBuffer_;
     std::shared_ptr<LpcObject> boundObject_;
     bool closed_ = false;

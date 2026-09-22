@@ -17,7 +17,11 @@ The language core works. Driver-side capabilities already landed:
 - Multi-port `listen:` (telnet plus extra ports)
 - TLS on marked listen ports
 - WebSocket and WSS
-- Connection encoding (default utf-8) and GMCP
+- Connection encoding (default utf-8), GMCP, MSSP, MSDP, and MXP
+- MTTS: already driver-complete (`request_term_type`/
+  `start_request_term_type`/`terminal_type`/`query_terminal_type`); the
+  bitmask-parsing convention is genuinely mudlib-side in real FluffOS,
+  not a driver gap
 - `save_object` FluffOS `.o` write-side
 - Net efun sidecar (`src/efun/NetEfuns.cpp`)
 

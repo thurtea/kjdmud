@@ -191,12 +191,16 @@ void Server::onNewConnection(int clientFd, const ListenPort& spec) {
         conn->enableWebSocket();
     } else {
         // comm.c new_user(): IAC DO TTYPE then IAC DO NAWS. Also offer
-        // GMCP and MSSP (option 70/0x46; see Connection::sendMssp()'s
-        // own comment).
+        // GMCP, MSSP (option 70/0x46; see Connection::sendMssp()'s own
+        // comment), MSDP (option 69/0x45; see Connection::sendMsdp()'s
+        // own comment), and MXP (option 91/0x5B; see Connection's own
+        // mxpEnabled() comment).
         conn->send(std::string("\xff\xfd\x18", 3));
         conn->send(std::string("\xff\xfd\x1f", 3));
         conn->send(std::string("\xff\xfb\xc9", 3));
         conn->send(std::string("\xff\xfb\x46", 3));
+        conn->send(std::string("\xff\xfb\x45", 3));
+        conn->send(std::string("\xff\xfb\x5b", 3));
     }
 
     OutputContext::set(conn.get());
@@ -513,6 +517,14 @@ void Server::handleConnection(Connection& conn) {
         // against a running driver) never got the same addition, so a
         // WS client never saw a WILL MSSP to reply to at all.
         conn.send(std::string("\xff\xfb\x46", 3));
+        // MSDP (option 69/0x45; see Connection::sendMsdp()'s own
+        // comment), added alongside from the start this time rather
+        // than needing a second live-testing pass to notice the gap.
+        conn.send(std::string("\xff\xfb\x45", 3));
+        // MXP (option 91/0x5B; see Connection's own mxpEnabled()
+        // comment), same "added alongside from the start" note as MSDP
+        // just above.
+        conn.send(std::string("\xff\xfb\x5b", 3));
     }
 
     auto obj = conn.boundObject();
@@ -551,6 +563,23 @@ void Server::handleConnection(Connection& conn) {
         } catch (const std::exception& e) {
             std::cerr << "[net] connection fd=" << conn.fd()
                        << " gmcp() failed: " << e.what() << "\n";
+        }
+        OutputContext::set(nullptr);
+    }
+
+    // MSDP: each incoming MSDP_VAR/MSDP_VAL pair (a client's own sent
+    // variable, or its REPORT/UNREPORT/LIST/RESET request - see
+    // Connection::handleSubnegotiation()'s own comment) reaches the
+    // mudlib as msdp(var, val), same one-apply-per-message shape as
+    // gmcp() just above.
+    for (const auto& [var, val] : conn.takeIncomingMsdp()) {
+        if (!obj) break;
+        OutputContext::set(&conn);
+        try {
+            vm_.callFunction(obj, "msdp", {Value(var), Value(val)});
+        } catch (const std::exception& e) {
+            std::cerr << "[net] connection fd=" << conn.fd()
+                       << " msdp() failed: " << e.what() << "\n";
         }
         OutputContext::set(nullptr);
     }

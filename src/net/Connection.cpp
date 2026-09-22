@@ -32,6 +32,12 @@ constexpr unsigned char kTelOptGmcp = 201;
 // Real client-facing MSSP telnet option code (public MSSP spec, not
 // FluffOS/LDMud/DGD-specific; see MsspHandler.hpp's own comment).
 constexpr unsigned char kTelOptMssp = 70;
+// Real client-facing MSDP telnet option code (public MSDP spec, same
+// provenance note as kTelOptMssp above: not FluffOS/LDMud/DGD-specific).
+constexpr unsigned char kTelOptMsdp = 69;
+// Real client-facing MXP telnet option code (public MXP spec, same
+// provenance note as kTelOptMssp/kTelOptMsdp above).
+constexpr unsigned char kTelOptMxp = 91;
 constexpr unsigned char kTelQualIs = 0;
 constexpr unsigned char kTelQualSend = 1;
 
@@ -255,6 +261,33 @@ void Connection::sendMssp(const std::string& mudName, int playerCount, int uptim
     appendMsspVar(out, "PLAYERS", std::to_string(playerCount));
     appendMsspVar(out, "UPTIME", std::to_string(uptimeSeconds));
     appendMsspVar(out, "CODEBASE", "kjdmud");
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSe);
+    send(out);
+}
+
+namespace {
+// Real MSDP wire constants (public spec, tintin.mudhalla.net/protocols/
+// msdp): MSDP_VAR/MSDP_VAL are raw bytes 1 and 2, same numeric values as
+// MSSP_VAR/MSSP_VAL above by coincidence of the two independent specs,
+// not a shared constant - each is scoped inside its own telnet option's
+// subnegotiation (69 here, 70 above), so there is no wire collision.
+// MSDP_TABLE_OPEN/CLOSE (3/4) and MSDP_ARRAY_OPEN/CLOSE (5/6) are real
+// spec bytes for structured values; out of scope for this driver's v1
+// (see Connection.hpp's own sendMsdp() comment).
+constexpr unsigned char kMsdpVar = 1;
+constexpr unsigned char kMsdpVal = 2;
+} // namespace
+
+void Connection::sendMsdp(const std::string& varName, const std::string& value) {
+    std::string out;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSb);
+    out += static_cast<char>(kTelOptMsdp);
+    out += static_cast<char>(kMsdpVar);
+    out += varName;
+    out += static_cast<char>(kMsdpVal);
+    out += value;
     out += static_cast<char>(kIac);
     out += static_cast<char>(kSe);
     send(out);
@@ -573,6 +606,24 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
             gmcpEnabled_ = true;
             return;
         }
+        // A client volunteering "IAC WILL MSDP" unprompted (this driver
+        // does not always send its own proactive WILL MSDP first, e.g.
+        // a raw socketpair test harness). Same accept-and-enable shape
+        // as GMCP just above.
+        if (option == kTelOptMsdp) {
+            unsigned char resp[] = {kIac, kDo, kTelOptMsdp};
+            send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
+            msdpEnabled_ = true;
+            return;
+        }
+        // A client volunteering "IAC WILL MXP" unprompted, same shape
+        // as the MSDP branch just above.
+        if (option == kTelOptMxp) {
+            unsigned char resp[] = {kIac, kDo, kTelOptMxp};
+            send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
+            mxpEnabled_ = true;
+            return;
+        }
         unsigned char resp[] = {kIac, kDont, option};
         send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
     } else if (kind == TelnetState::Do) {
@@ -583,6 +634,23 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
         }
         if (option == kTelOptMssp) {
             msspNegotiated_ = true;
+            return;
+        }
+        // The client's "IAC DO MSDP" reply to this driver's own
+        // proactive "IAC WILL MSDP" (Server::onNewConnection(),
+        // handleConnection()'s WebSocket parity path). Unlike MSSP's
+        // one-shot flag, MSDP has no single fixed data block to send
+        // back here - it just enables sendMsdp()/incoming var parsing
+        // from here on, same as the GMCP Do-branch just above.
+        if (option == kTelOptMsdp) {
+            msdpEnabled_ = true;
+            return;
+        }
+        // The client's "IAC DO MXP" reply to this driver's own
+        // proactive "IAC WILL MXP" offer, same shape as the MSDP branch
+        // just above.
+        if (option == kTelOptMxp) {
+            mxpEnabled_ = true;
             return;
         }
         unsigned char resp[] = {kIac, kWont, option};
@@ -621,6 +689,28 @@ void Connection::handleSubnegotiation() {
     if (sbOption == kTelOptGmcp) {
         if (sbBuffer_.size() > 1) incomingGmcp_.push_back(sbBuffer_.substr(1));
         gmcpEnabled_ = true;
+        return;
+    }
+
+    if (sbOption == kTelOptMsdp) {
+        // v1 scope (see Connection.hpp's own sendMsdp() comment): a
+        // single "MSDP_VAR name MSDP_VAL value" pair per subnegotiation,
+        // no MSDP_TABLE/MSDP_ARRAY nesting. A real client's REPORT/LIST/
+        // RESET requests arrive in exactly this shape (MSDP_VAR "REPORT"
+        // MSDP_VAL "<var name>"), so this already covers them; the
+        // mudlib apply this feeds (Server::handleConnection()) decides
+        // what, if anything, to do with a given var/val pair.
+        if (sbBuffer_.size() > 1 && static_cast<unsigned char>(sbBuffer_[1]) == kMsdpVar) {
+            size_t valPos = sbBuffer_.find(static_cast<char>(kMsdpVal), 2);
+            std::string name = (valPos == std::string::npos)
+                ? sbBuffer_.substr(2)
+                : sbBuffer_.substr(2, valPos - 2);
+            std::string value = (valPos == std::string::npos)
+                ? std::string()
+                : sbBuffer_.substr(valPos + 1);
+            incomingMsdp_.emplace_back(std::move(name), std::move(value));
+        }
+        msdpEnabled_ = true;
         return;
     }
 

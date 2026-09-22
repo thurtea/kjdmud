@@ -1,5 +1,87 @@
 # STATUS
 
+**2026-09-22: MXP (src/proto/instruct.md Phase 3 row, docs/COMPARISON.md
+2.32b), and MTTS correction (2.32).** MUD eXtension Protocol, telnet
+option 91/0x5B. Negotiation only (`Connection::mxpEnabled()`, same
+two-branch Will/Do shape MSDP just added, both offered proactively from
+`Server::onNewConnection()`/`handleConnection()`'s WS-parity path
+alongside GMCP/MSSP/MSDP); no incoming subnegotiation parsing, since
+real MXP's optional client VERSION/SUPPORT replies have no reader in
+this driver to consume them. New `src/proto/MxpHandler` (unlike
+GmcpHandler/MsdpHandler, this one holds the real logic, not a thin
+wrapper: three static text-wrap methods, `bold()`/`color()`/`link()`,
+each returning plain text unchanged when the target connection has no
+MXP, or the real `<B>`/`<COLOR FORE=.. BACK=..>`/`<SEND "..">` element
+otherwise). New efuns `has_mxp(void|object)` (mirrors `has_gmcp`/
+`has_msdp`'s optional-object-or-current-giver shape) and
+`mxp_bold`/`mxp_color`/`mxp_link(object, string, ...)` (a required
+target object instead, since wrapping text for a specific player ahead
+of a `write()`/`tell_object()` call is the real use case, not
+necessarily the currently-executing object; matches
+`src/proto/instruct.md`'s own `mxp_tag(object player, ...)` sketch
+shape). Public client protocol (zuggsoft.com/zmud/mxp.htm), same
+citation caveat as MSSP/MSDP: not tied to any one real LP driver's own
+C source, `temp/` absent on this machine either way. 3 new regression
+tests in `test/test_net.cpp` (efun wrap-vs-plain-text round trip,
+Will-branch wire bytes, Do-branch flag). Suite green (2/2 tests). Live
+boot (`./build/kjdmud etc/driver.cfg`) confirmed a real telnet client
+sees all four of GMCP/MSSP/MSDP/MXP offered on connect.
+
+That closes every protocol in `src/proto/instruct.md`'s own table
+except MTTS, which is not actually open: a comment already present in
+`include/kjdmud/net/Connection.hpp` and `src/efun/EfunTable.cpp` (both
+present since the very first commit, predating this repo's own
+2026-09-12 docs reset, so never carried into `STATUS.md` until now)
+documents that real FluffOS's own driver-level MTTS mechanism is
+exactly `request_term_type()`/`start_request_term_type()`/
+`terminal_type()` (the apply)/`query_terminal_type()`, all four of
+which already exist in this driver. The multi-round "ask again, compare
+to the previous answer, stop once it repeats or a third round yields
+'MTTS <bitmask>'" convention that `src/proto/instruct.md`'s own
+`MttsHandler.hpp` sketch (bitmask table, `query_client_flags()` efun)
+assumed was driver-side is genuinely mudlib-side in real FluffOS,
+confirmed by reading `comm.c` directly: no round-counting state, no
+"MTTS" string comparison, and no bitmask table anywhere in the real
+driver. Building that sketch would have been unverified, wrongly-scoped
+driver work. `docs/COMPARISON.md` row 2.32 corrected to reflect this
+rather than left listing MTTS as open driver work.
+
+**2026-09-22: MSDP (src/proto/instruct.md Phase 3 row, docs/COMPARISON.md
+2.32a).** Mud Server Data Protocol, telnet option 69/0x45. Same shape as
+GMCP (bidirectional, so it lives in `src/net/Connection.cpp` plus a thin
+`src/proto/MsdpHandler.hpp`/`.cpp` wrapper, not MSSP's Server-only
+one-shot-flag pattern): `Server::onNewConnection()` now sends "IAC WILL
+MSDP" alongside the existing TTYPE/NAWS/GMCP/MSSP offers (both the
+telnet-only path and `handleConnection()`'s WebSocket parity path, added
+together this time rather than needing a second live-testing pass the
+way MSSP's WS-parity gap did). `Connection::handleNegotiation()` accepts
+either a client-initiated "IAC WILL MSDP" or a reply "IAC DO MSDP" to
+this driver's own offer, both setting `msdpEnabled_`.
+`Connection::sendMsdp(var, value)` writes "IAC SB MSDP MSDP_VAR var
+MSDP_VAL value IAC SE"; `handleSubnegotiation()` parses the same shape
+back into `incomingMsdp_` (a `vector<pair<string,string>>`), drained by
+`Server::handleConnection()` into a per-pair `msdp(var, val)` mudlib
+apply, the same one-apply-per-message shape `gmcp()` already uses. New
+efuns `has_msdp()`/`send_msdp(string, string)` in `src/efun/NetEfuns.cpp`,
+named after the established `has_gmcp`/`send_gmcp` precedent rather than
+`src/proto/instruct.md`'s own original `query_msdp`/`msdp_send` sketch
+(that file already isn't a live status signal per `CLAUDE.md`, and
+`GmcpHandler.hpp`'s own comment already documents the same kind of
+naming deviation for GMCP). v1 scope: single scalar MSDP_VAR/MSDP_VAL
+pairs only, no MSDP_TABLE/MSDP_ARRAY nesting (real spec section 3) since
+nothing in this driver has a structured value to report yet; a real
+client's REPORT/UNREPORT/LIST/RESET requests already arrive in the
+plain scalar shape this covers, so nothing about that side is blocked
+on the nesting gap. Public client protocol (tintin.mudhalla.net/
+protocols/msdp), not tied to any one real LP driver's own C source, so
+this is not a verified port against vendored reference source, same
+citation caveat MSSP's own entry below already notes (`temp/` is not
+present on disk on this machine either way). 3 new regression tests in
+`test/test_net.cpp` (efun round-trip + wire bytes, incoming subneg
+parsing, and the Do-branch negotiation flag), plus a live boot
+(`./build/kjdmud etc/driver.cfg`) confirmed a real telnet client sees
+"IAC WILL MSDP" (`\xff\xfb\x45`) on connect. Suite green (2/2 tests).
+
 **2026-09-20: MSSP (src/proto/instruct.md, Phase 3 row).** MUD Server
 Status Protocol, telnet option 70/0x46. `Server::onNewConnection()` now
 sends "IAC WILL MSSP" to every telnet (non-WebSocket) connection
