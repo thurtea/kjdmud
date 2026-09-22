@@ -1,5 +1,143 @@
 # STATUS
 
+**2026-09-22: ZMP mudlib usage docs, plus one end-to-end regression
+test.** New `docs/dev/PROTOCOLS.md`: mudlib-facing usage notes for
+out-of-band protocol efuns/applies, ZMP only for now (a `has_gmcp`-style
+section for the others can be added the same way later). Corrects a
+misconception surfaced while writing it: `zmp_command()` does not take
+a `command_giver` argument and does not receive its arguments variadic -
+the real, verified signature (already implemented and cited in
+`docs/dev/STATUS.md`'s own ZMP entry) is `void zmp_command(string cmd,
+mixed *args)`, running on the interactive object itself with no extra
+leading argument, same shape `terminal_type()`/`window_size()` already
+use. Includes a minimal example handler (dispatching on `cmd`, replying
+via `send_zmp()`), `send_zmp()`'s own real signature and its
+`command_giver`-not-`current_object` distinction from `telnet_msp_oob()`,
+and framing notes (NUL/IAC limitations on what a field can literally
+contain, and that a malformed inbound message is silently discarded
+before `zmp_command()` ever runs). `ZmpHandler.hpp`'s own header comment
+now states the same expected LPC signature directly, not only in the
+separate doc. `README.md`'s own docs list updated to point at the new
+file.
+
+The apply-dispatch and malformed-frame driver-level tests already
+covered what this row's own request asked for end-to-end (a simulated
+mudlib `zmp_command()` receiving correctly-parsed arguments, and no
+crash on a malformed frame), except the malformed-frame case had only
+been tested at `Connection::takeIncomingZmp()` level, not through the
+full `Server::dispatchIncomingZmp()` path a live connection actually
+uses. 1 new regression test closes that: a malformed frame run through
+the real dispatch method confirms `zmp_command()` is never called at
+all, not just that the queue comes back empty. Full clean rebuild (exit
+0), `ctest` 2/2 green. The optional live-telnet check (a real ZMP
+command reacted to by the example handler) was not run this row - the
+existing `testZmpCommandApplyDispatchReceivesCommandAndArgsArray` test
+already exercises the identical dispatch path with real parsed
+command/args, and this session's remaining scope (a testing-seam design
+note) made the live check's own marginal value not worth the time here.
+
+**2026-09-22: GMCP_ENABLE/MSDP_ENABLE mudlib applies (previously flagged
+gap, now fixed), and a real send_msdp naming defect corrected.** Real
+`safe_apply(APPLY_GMCP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)` and
+`safe_apply(APPLY_MSDP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)`
+(`src/net/telnet.cc`'s own `on_telnet_do_gmcp()`/`on_telnet_do_msdp()`,
+re-checked directly against a fresh clone before writing any code, not
+trusted from the finding note alone) confirmed identical in shape to
+MSP's own already-implemented `MSP_ENABLE`: zero args, `ORIGIN_DRIVER`,
+fired exactly once when negotiation completes from either direction (a
+client-volunteered WILL or a reply to this driver's own proactive
+offer - both funnel into the same `on_telnet_do_X()` function, same as
+already established for MSP). Real LPC-mapped names, confirmed against
+`src/vm/internal/applies` (`GMCP_ENABLE`/`MSDP_ENABLE`, both with no
+`:override`, so the lowercased macro name is the real one): `gmcp_enable()`
+and `msdp_enable()`, no signature surprises versus MSP's own
+`msp_enable()`.
+
+Implementation exactly mirrors `fireMspEnableIfNegotiated()`: new
+one-shot `Connection::takeGmcpEnableNegotiated()`/
+`takeMsdpEnableNegotiated()` flags (set in both the Will- and Do-branches
+of `handleNegotiation()`, same as MSP's own), and new public static
+`Server::fireGmcpEnableIfNegotiated()`/`fireMsdpEnableIfNegotiated()`,
+wired into `handleConnection()` alongside the existing MSP call. No
+semantic differences from MSP found worth calling out beyond the ones
+already known (MSDP/GMCP's own separate incoming-message applies,
+`msdp()`/`gmcp()`, already existed before this row and are unrelated to
+this new enable-only apply).
+
+Re-checking real `core.spec` for `has_gmcp`/`send_gmcp`/`has_msdp`/
+`send_msdp` while confirming these applies turned up a real, separate
+naming defect, fixed in the same pass: the real MSDP send efun is
+`send_msdp_variable(string, string | float | int OR_BUFFER)`, not
+`send_msdp` - this driver's own earlier MSDP row (before real source was
+checked for it) invented the wrong name. `has_gmcp`/`send_gmcp`/
+`has_msdp` were all already correct. Renamed the efun and every
+reference to it (`NetEfuns.cpp`, `MsdpHandler.hpp`'s own comment,
+`Connection.cpp`'s own `sendMsdp()` comment, the existing MSDP efun
+test in `test/test_net.cpp`); kept the existing string-only v1 scope
+(matching `sendMsdp()`'s own already-documented scope decision) rather
+than widening to the real signature's float/int/buffer union, a
+separate, bigger undertaking outside this row.
+
+4 new regression tests in `test/test_net.cpp`: one apply-fires-once
+test per protocol (an incrementing counter, same no-double-fire proof
+style as MSP's own test), one confirming both fire correctly from the
+Will-branch too (not just Do), and one confirming neither apply fires
+on a connection that never negotiated at all, nor does negotiating one
+protocol falsely fire the other's apply. Full clean rebuild from
+scratch (exit 0), `ctest` 2/2 green, and a live boot where a real
+telnet client saw `IAC WILL GMCP` offered and a real `IAC DO GMCP`
+reply produced no crash and no client-visible response (correct - the
+driver's own bundled login object has no `gmcp_enable()` defined,
+matching the same silent-no-op-on-missing-function behavior already
+established for MSP).
+
+**2026-09-22: sendGmcp()/sendMssp()/sendMsdp() IAC escaping (previously
+flagged gap, now fixed).** `appendIacEscaped()` (the helper `sendMspOob()`/
+`sendZmp()` already used) moved from being local to those two methods to
+file scope in `src/net/Connection.cpp`, right after the telnet option
+constants, so every `sendX()` method in the file can use it regardless
+of definition order. All three of `sendGmcp()`, `sendMssp()` (via its
+own `appendMsspVar()` helper), and `sendMsdp()` now escape every field
+that can carry mudlib-supplied content through it: `sendGmcp()`'s whole
+package string (previously built via raw concatenation, no escaping at
+all), `sendMssp()`'s `NAME`/`PLAYERS`/`UPTIME`/`CODEBASE` variable
+values (the value half only needed it in practice - `mudName` is
+`Config::mudName()`, a driver config value, not a hardcoded literal -
+but the name half is escaped too rather than reasoning per-call-site
+about which half might ever carry arbitrary bytes), and `sendMsdp()`'s
+variable name and value (both are `send_msdp`'s own two string
+arguments). This closes the gap `docs/dev/STATUS.md`'s own MSP entry
+below already flagged as real and reachable, not just theoretical, the
+same day it was found.
+
+3 new regression tests in `test/test_net.cpp`, one per method, each
+covering all four positions (IAC at the start, middle, end, and
+multiple times in one payload) against an independent oracle helper
+(`escapeIacOracle()`, a separate find-based rebuild of the doubling
+logic, not the same per-byte loop `appendIacEscaped()` itself uses, so
+a bug in the production loop is not simply mirrored back by the test's
+own expectation). One real bug caught while writing these before they
+ever ran: several of the literal payloads placed `\xff` directly before
+a hex-digit character in the same string literal (e.g. `"\xffCore.Ping"`)
+- a raw `\x` escape in C++ consumes every hex-digit character that
+follows it, so that literal actually parsed as the single out-of-range
+value `0xFFC`, silently truncated to `0xFC`, not `0xFF` followed by
+`'C'`. Confirmed with a small standalone compile
+(`g++ -std=c++20 -Wall`, which flags this exact case as "hex escape
+sequence out of range") before touching the real test file, then fixed
+by splitting every `\xff` from any text that follows it into its own
+adjacent string literal (`"\xff" "Core.Ping"`), which correctly stops
+each escape at exactly one byte; re-verified with the same standalone
+compile showing zero such warnings, then with the real byte-for-byte
+oracle comparison in the actual tests. Full clean rebuild (exit 0),
+`ctest` 2/2 green. The optional live-telnet check (a real mudlib
+sending a literal 0xFF in one of these payloads) was not run this row -
+the exact-byte oracle comparison in each of the three new unit tests
+already asserts the identical wire-level claim a live check would, and
+this session's remaining scope (GMCP_ENABLE/MSDP_ENABLE, a ZMP usage
+doc, a testing-seam design note) made the live check's own marginal
+value not worth the time here; still open if wanted later.
+
 **2026-09-22: ZMP (docs/COMPARISON.md 2.32d).** Zenith MUD Protocol,
 telnet option 93/0x5D. Re-cloned upstream FluffOS fresh (this machine's
 own `temp/` still absent; per `docs/dev/ROADMAP.md`'s own "Verification

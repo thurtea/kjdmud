@@ -389,6 +389,36 @@ void Server::fireMspEnableIfNegotiated(VM& vm, Connection& conn) {
     OutputContext::set(nullptr);
 }
 
+void Server::fireGmcpEnableIfNegotiated(VM& vm, Connection& conn) {
+    if (!conn.takeGmcpEnableNegotiated()) return;
+    auto obj = conn.boundObject();
+    if (!obj) return;
+
+    OutputContext::set(&conn);
+    try {
+        vm.callFunction(obj, "gmcp_enable", {});
+    } catch (const std::exception& e) {
+        std::cerr << "[net] connection fd=" << conn.fd()
+                   << " gmcp_enable() failed: " << e.what() << "\n";
+    }
+    OutputContext::set(nullptr);
+}
+
+void Server::fireMsdpEnableIfNegotiated(VM& vm, Connection& conn) {
+    if (!conn.takeMsdpEnableNegotiated()) return;
+    auto obj = conn.boundObject();
+    if (!obj) return;
+
+    OutputContext::set(&conn);
+    try {
+        vm.callFunction(obj, "msdp_enable", {});
+    } catch (const std::exception& e) {
+        std::cerr << "[net] connection fd=" << conn.fd()
+                   << " msdp_enable() failed: " << e.what() << "\n";
+    }
+    OutputContext::set(nullptr);
+}
+
 void Server::dispatchIncomingZmp(VM& vm, Connection& conn) {
     auto obj = conn.boundObject();
     for (const auto& [command, args] : conn.takeIncomingZmp()) {
@@ -647,10 +677,15 @@ void Server::handleConnection(Connection& conn) {
                       static_cast<int>(std::time(nullptr) - bootTime_));
     }
 
-    // MSP: pulled out as its own static method (Server.hpp's own
-    // comment) so it is directly testable without a live accept loop,
-    // same as dispatchLine()/fireNetDeadIfLinkDead() above it.
+    // MSP/GMCP/MSDP: each pulled out as its own static method
+    // (Server.hpp's own comment) so it is directly testable without a
+    // live accept loop, same as dispatchLine()/fireNetDeadIfLinkDead()
+    // above it. GMCP/MSDP added this row, re-verifying ZMP against real
+    // source turned up that both also have real enable-applies this
+    // driver's own already-shipped handling never fired.
     fireMspEnableIfNegotiated(vm_, conn);
+    fireGmcpEnableIfNegotiated(vm_, conn);
+    fireMsdpEnableIfNegotiated(vm_, conn);
 
     if (obj && !lines.empty()) {
         OutputContext::set(&conn);

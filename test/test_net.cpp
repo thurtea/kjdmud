@@ -422,7 +422,7 @@ void testEncodingAndMsdpEfunsOnASocketpair() {
     NetHarness harness;
     harness.writeFile("/msdp.c",
         "int msdp() { return has_msdp(); }\n"
-        "void send_it() { send_msdp(\"ROOM_NAME\", \"Gatehouse\"); }\n");
+        "void send_it() { send_msdp_variable(\"ROOM_NAME\", \"Gatehouse\"); }\n");
     auto obj = harness.objects.cloneObject("/msdp");
     assert(obj);
 
@@ -617,6 +617,157 @@ void testMspEnableFiresMudlibApplyOnce() {
 
     ::close(fds[1]);
     std::cout << "testMspEnableFiresMudlibApplyOnce OK\n";
+}
+
+// Real "safe_apply(APPLY_GMCP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+// (src/net/telnet.cc's own on_telnet_do_gmcp(), confirmed against
+// current FluffOS source), found missing from this driver's own
+// already-shipped GMCP handling by re-verifying ZMP rather than
+// trusting an earlier session's own summary. Same shape as
+// testMspEnableFiresMudlibApplyOnce above: an incrementing counter
+// directly proves no double-fire, not just a flag re-set to the same
+// value.
+void testGmcpEnableFiresMudlibApplyOnce() {
+    NetHarness harness;
+    harness.writeFile("/gmcp_obj.c",
+        "int enable_calls = 0;\n"
+        "void gmcp_enable() { enable_calls += 1; }\n"
+        "int enable_call_count() { return enable_calls; }\n");
+    auto obj = harness.objects.cloneObject("/gmcp_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 0);
+
+    unsigned char doGmcp[] = {255, 253, 201};
+    assert(::write(fds[1], doGmcp, sizeof(doGmcp)) == static_cast<ssize_t>(sizeof(doGmcp)));
+    conn.pollLines();
+    kjdmud::Server::fireGmcpEnableIfNegotiated(harness.vm, conn);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+    kjdmud::Server::fireGmcpEnableIfNegotiated(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+
+    ::close(fds[1]);
+    std::cout << "testGmcpEnableFiresMudlibApplyOnce OK\n";
+}
+
+// Real "safe_apply(APPLY_MSDP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+// (src/net/telnet.cc's own on_telnet_do_msdp()), same shape as
+// testGmcpEnableFiresMudlibApplyOnce just above.
+void testMsdpEnableFiresMudlibApplyOnce() {
+    NetHarness harness;
+    harness.writeFile("/msdp_obj.c",
+        "int enable_calls = 0;\n"
+        "void msdp_enable() { enable_calls += 1; }\n"
+        "int enable_call_count() { return enable_calls; }\n");
+    auto obj = harness.objects.cloneObject("/msdp_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 0);
+
+    unsigned char doMsdp[] = {255, 253, 69};
+    assert(::write(fds[1], doMsdp, sizeof(doMsdp)) == static_cast<ssize_t>(sizeof(doMsdp)));
+    conn.pollLines();
+    kjdmud::Server::fireMsdpEnableIfNegotiated(harness.vm, conn);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+    kjdmud::Server::fireMsdpEnableIfNegotiated(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "enable_call_count", {}).data) == 1);
+
+    ::close(fds[1]);
+    std::cout << "testMsdpEnableFiresMudlibApplyOnce OK\n";
+}
+
+// A client volunteering "IAC WILL GMCP"/"IAC WILL MSDP" unprompted must
+// also fire the enable-apply - real on_telnet_do_gmcp()/
+// on_telnet_do_msdp() run identically whichever side's offer completes
+// the negotiation, same as MSP's own Will-branch already covers.
+void testGmcpAndMsdpEnableFireFromWillBranchToo() {
+    NetHarness harness;
+    harness.writeFile("/willenable_obj.c",
+        "int gmcp_calls = 0;\n"
+        "int msdp_calls = 0;\n"
+        "void gmcp_enable() { gmcp_calls += 1; }\n"
+        "void msdp_enable() { msdp_calls += 1; }\n"
+        "int gmcp_call_count() { return gmcp_calls; }\n"
+        "int msdp_call_count() { return msdp_calls; }\n");
+    auto obj = harness.objects.cloneObject("/willenable_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    unsigned char willGmcp[] = {255, 251, 201};
+    assert(::write(fds[1], willGmcp, sizeof(willGmcp)) == static_cast<ssize_t>(sizeof(willGmcp)));
+    unsigned char willMsdp[] = {255, 251, 69};
+    assert(::write(fds[1], willMsdp, sizeof(willMsdp)) == static_cast<ssize_t>(sizeof(willMsdp)));
+    conn.pollLines();
+    kjdmud::Server::fireGmcpEnableIfNegotiated(harness.vm, conn);
+    kjdmud::Server::fireMsdpEnableIfNegotiated(harness.vm, conn);
+
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "gmcp_call_count", {}).data) == 1);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "msdp_call_count", {}).data) == 1);
+
+    ::close(fds[1]);
+    std::cout << "testGmcpAndMsdpEnableFireFromWillBranchToo OK\n";
+}
+
+// Neither apply may fire on a connection that never negotiated GMCP or
+// MSDP at all (the "unsupported/unnegotiated" case the review checklist
+// calls for): a fresh Connection with no wire bytes exchanged yet.
+void testGmcpAndMsdpEnableDoNotFireWhenUnnegotiated() {
+    NetHarness harness;
+    harness.writeFile("/noneg_obj.c",
+        "int gmcp_calls = 0;\n"
+        "int msdp_calls = 0;\n"
+        "void gmcp_enable() { gmcp_calls += 1; }\n"
+        "void msdp_enable() { msdp_calls += 1; }\n"
+        "int gmcp_call_count() { return gmcp_calls; }\n"
+        "int msdp_call_count() { return msdp_calls; }\n");
+    auto obj = harness.objects.cloneObject("/noneg_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    // No bytes exchanged at all: neither one-shot flag was ever set, so
+    // both calls must be no-ops.
+    kjdmud::Server::fireGmcpEnableIfNegotiated(harness.vm, conn);
+    kjdmud::Server::fireMsdpEnableIfNegotiated(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "gmcp_call_count", {}).data) == 0);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "msdp_call_count", {}).data) == 0);
+    assert(!conn.gmcpEnabled());
+    assert(!conn.msdpEnabled());
+
+    // Negotiating one protocol must not falsely fire the other's apply.
+    unsigned char doGmcp[] = {255, 253, 201};
+    assert(::write(fds[1], doGmcp, sizeof(doGmcp)) == static_cast<ssize_t>(sizeof(doGmcp)));
+    conn.pollLines();
+    kjdmud::Server::fireGmcpEnableIfNegotiated(harness.vm, conn);
+    kjdmud::Server::fireMsdpEnableIfNegotiated(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "gmcp_call_count", {}).data) == 1);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "msdp_call_count", {}).data) == 0);
+
+    ::close(fds[1]);
+    std::cout << "testGmcpAndMsdpEnableDoNotFireWhenUnnegotiated OK\n";
 }
 
 // mxp_bold/mxp_color/mxp_link all take a required target object (see
@@ -984,6 +1135,45 @@ void testZmpCommandApplyDispatchReceivesCommandAndArgsArray() {
     std::cout << "testZmpCommandApplyDispatchReceivesCommandAndArgsArray OK\n";
 }
 
+// End-to-end confirmation that a malformed inbound frame never reaches
+// zmp_command() through the full dispatch path (Connection parsing plus
+// Server::dispatchIncomingZmp() together), not just that
+// Connection::takeIncomingZmp() itself comes back empty
+// (testZmpMalformedInboundFrameNotEndingInNulIsDiscarded already covers
+// that narrower claim). No crash either way.
+void testZmpMalformedFrameNeverReachesApplyEndToEnd() {
+    NetHarness harness;
+    harness.writeFile("/zmp_malformed_obj.c",
+        "int call_count = 0;\n"
+        "void zmp_command(string cmd, mixed *args) { call_count += 1; }\n"
+        "int get_call_count() { return call_count; }\n");
+    auto obj = harness.objects.cloneObject("/zmp_malformed_obj");
+    assert(obj);
+
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+    conn.attach(obj);
+
+    // "cmd\0arg" - no trailing NUL after "arg", an incomplete frame per
+    // real _zmp_telnet() (libtelnet.c).
+    std::vector<unsigned char> sb = {255, 250, 93};
+    for (char c : std::string("cmd\0arg", 7)) {
+        sb.push_back(static_cast<unsigned char>(c));
+    }
+    sb.push_back(255);
+    sb.push_back(240);
+    assert(::write(fds[1], sb.data(), sb.size()) == static_cast<ssize_t>(sb.size()));
+    conn.pollLines();
+
+    kjdmud::Server::dispatchIncomingZmp(harness.vm, conn);
+    assert(std::get<int64_t>(harness.vm.callFunction(obj, "get_call_count", {}).data) == 0);
+
+    ::close(fds[1]);
+    std::cout << "testZmpMalformedFrameNeverReachesApplyEndToEnd OK\n";
+}
+
 } // namespace
 
 // src/config/instruct.md Phase 0's own max_connections row.
@@ -1047,6 +1237,138 @@ void testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock() {
     std::cout << "testMsspNegotiationSetsOneShotFlagAndSendMsspWritesExpectedBlock OK\n";
 }
 
+namespace {
+// Independent oracle for the escaping regression tests below: doubles
+// every 0xFF byte in s, written separately from Connection.cpp's own
+// appendIacEscaped() (a find-based rebuild here rather than the same
+// per-byte loop) so a bug in the production loop is not simply mirrored
+// back by the test's own expectation.
+std::string escapeIacOracle(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        out += s[i];
+        if (static_cast<unsigned char>(s[i]) == 0xFF) out += s[i];
+    }
+    return out;
+}
+} // namespace
+
+// GMCP/MSSP/MSDP payload IAC-escaping (docs/dev/STATUS.md's own
+// previously-flagged gap, now fixed to use the same appendIacEscaped()
+// helper sendMspOob()/sendZmp() already did): a literal 0xFF byte
+// anywhere in a mudlib-supplied payload must be doubled on the wire, or
+// a real client parsing the subnegotiation would read that lone 0xFF as
+// the start of a new telnet command and truncate the payload right
+// there. Four positions per protocol (start/middle/end/multiple),
+// matching the shape of the framing bug this exact class of mistake
+// would produce at each position.
+void testSendGmcpEscapesIacAtEveryPosition() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    // Every \xff below is split from the following text as its own
+    // adjacent string literal (e.g. "\xff" "Core.Ping", not
+    // "\xffCore.Ping"): a raw \x hex escape consumes every hex-digit
+    // character that follows it, so "\xffC" parses as the single
+    // out-of-range value 0xFFC (silently truncated), not the intended
+    // 0xFF followed by 'C' - confirmed empirically with a standalone
+    // compile before writing these. Splitting the literal is what keeps
+    // each \xff exactly one byte regardless of what character follows.
+    std::vector<std::string> cases = {
+        std::string("\xff" "Core.Ping", 10),                              // start
+        std::string("Cor" "\xff" "e.Ping", 10),                           // middle
+        std::string("Core.Ping" "\xff", 10),                              // end
+        std::string("\xff" "Cor" "\xff" "e.Pi" "\xff" "ng" "\xff", 13),   // multiple
+    };
+    for (const auto& payload : cases) {
+        conn.sendGmcp(payload);
+        std::string wired = readAvailable(fds[1]);
+        std::string expected;
+        expected += static_cast<char>(255);
+        expected += static_cast<char>(250);
+        expected += static_cast<char>(201);
+        expected += escapeIacOracle(payload);
+        expected += static_cast<char>(255);
+        expected += static_cast<char>(240);
+        assert(wired == expected);
+    }
+
+    ::close(fds[1]);
+    std::cout << "testSendGmcpEscapesIacAtEveryPosition OK\n";
+}
+
+void testSendMsspEscapesIacInVariableValues() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    // Same split-literal note as testSendGmcpEscapesIacAtEveryPosition()
+    // above applies to every \xff below.
+    std::vector<std::string> cases = {
+        std::string("\xff" "kjdmud", 7),                              // start
+        std::string("kj" "\xff" "dmud", 7),                           // middle
+        std::string("kjdmud" "\xff", 7),                              // end
+        std::string("\xff" "kj" "\xff" "dm" "\xff" "ud" "\xff", 10),  // multiple
+    };
+    for (const auto& mudName : cases) {
+        conn.sendMssp(mudName, 3, 120);
+        std::string wired = readAvailable(fds[1]);
+        // NAME's own value is the only variable piece of interest here;
+        // the escaped mudName must appear as MSSP_VAL (byte 2) followed
+        // immediately by the escaped bytes, right after "NAME".
+        std::string expectedFragment;
+        expectedFragment += static_cast<char>(2);
+        expectedFragment += escapeIacOracle(mudName);
+        assert(wired.find(std::string("NAME") + expectedFragment) != std::string::npos);
+        assert(static_cast<unsigned char>(wired[0]) == 255);
+        assert(static_cast<unsigned char>(wired[1]) == 250);
+        assert(static_cast<unsigned char>(wired[2]) == 70);
+        assert(static_cast<unsigned char>(wired[wired.size() - 2]) == 255);
+        assert(static_cast<unsigned char>(wired[wired.size() - 1]) == 240);
+    }
+
+    ::close(fds[1]);
+    std::cout << "testSendMsspEscapesIacInVariableValues OK\n";
+}
+
+void testSendMsdpEscapesIacInVarAndValue() {
+    int fds[2];
+    assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    setNonBlocking(fds[0]);
+    kjdmud::Connection conn(fds[0]);
+
+    // Same split-literal note as testSendGmcpEscapesIacAtEveryPosition()
+    // above applies to every \xff below.
+    std::vector<std::pair<std::string, std::string>> cases = {
+        {std::string("\xff" "ROOM_NAME", 10), std::string("\xff" "Gatehouse", 10)},  // start
+        {std::string("ROOM" "\xff" "_NAME", 10), std::string("Gate" "\xff" "house", 10)},  // middle
+        {std::string("ROOM_NAME" "\xff", 10), std::string("Gatehouse" "\xff", 10)},  // end
+        {std::string("\xff" "ROOM" "\xff" "_NAME" "\xff", 12),
+         std::string("\xff" "Gate" "\xff" "house" "\xff", 12)},  // multiple
+    };
+    for (const auto& [var, value] : cases) {
+        conn.sendMsdp(var, value);
+        std::string wired = readAvailable(fds[1]);
+        std::string expected;
+        expected += static_cast<char>(255);
+        expected += static_cast<char>(250);
+        expected += static_cast<char>(69);
+        expected += static_cast<char>(1);
+        expected += escapeIacOracle(var);
+        expected += static_cast<char>(2);
+        expected += escapeIacOracle(value);
+        expected += static_cast<char>(255);
+        expected += static_cast<char>(240);
+        assert(wired == expected);
+    }
+
+    ::close(fds[1]);
+    std::cout << "testSendMsdpEscapesIacInVarAndValue OK\n";
+}
+
 void runNetTests() {
     testListenConfigSynthesizesTelnetFromPort();
     testListenConfigParsesMultipleKindsAndTls();
@@ -1078,4 +1400,12 @@ void runNetTests() {
     testZmpMalformedInboundFrameNotEndingInNulIsDiscarded();
     testZmpEfunsUseRealSignaturesAndFilterNonStringArgs();
     testZmpCommandApplyDispatchReceivesCommandAndArgsArray();
+    testZmpMalformedFrameNeverReachesApplyEndToEnd();
+    testSendGmcpEscapesIacAtEveryPosition();
+    testSendMsspEscapesIacInVariableValues();
+    testSendMsdpEscapesIacInVarAndValue();
+    testGmcpEnableFiresMudlibApplyOnce();
+    testMsdpEnableFiresMudlibApplyOnce();
+    testGmcpAndMsdpEnableFireFromWillBranchToo();
+    testGmcpAndMsdpEnableDoNotFireWhenUnnegotiated();
 }

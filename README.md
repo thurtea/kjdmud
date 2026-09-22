@@ -58,6 +58,11 @@ ctest --test-dir build --output-on-failure
 - `docs/COMPARISON.md`: efun and feature comparison
 - `docs/dev/ROADMAP.md`: sequenced work and parked items
 - `docs/dev/STATUS.md`: dated development log
+- `docs/dev/PROTOCOLS.md`: mudlib-facing usage notes for out-of-band
+  telnet protocol efuns/applies (currently ZMP)
+- `docs/dev/TESTING_SEAMS.md`: why `Server` exposes small public static
+  apply-dispatch methods, and the naming convention new ones should
+  follow
 - `CREDITS.md`: prior-art drivers
 - `website/`: overview, download, documentation, web client
 

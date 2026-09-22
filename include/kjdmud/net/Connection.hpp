@@ -80,6 +80,23 @@ public:
         return out;
     }
 
+    // Real "safe_apply(APPLY_GMCP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+    // (src/net/telnet.cc's own on_telnet_do_gmcp(), confirmed against
+    // current FluffOS source - see Server.hpp's own
+    // fireGmcpEnableIfNegotiated() comment), fired once GMCP negotiation
+    // completes, same shape and same reason MSP's own
+    // mspEnableNegotiated_ needs a one-shot flag here rather than firing
+    // directly from handleNegotiation() (that needs VM access this
+    // class deliberately does not have). Found missing from this
+    // driver's own already-shipped GMCP handling by re-verifying MSDP/
+    // ZMP against real source rather than trusting an earlier session's
+    // own summary; GMCP_ENABLE turned out real too, not assumed.
+    bool takeGmcpEnableNegotiated() {
+        bool had = gmcpEnableNegotiated_;
+        gmcpEnableNegotiated_ = false;
+        return had;
+    }
+
     // One-shot flag, same shape as takeWindowSizeUpdate()/
     // takeTerminalTypeUpdate() below: set once by handleNegotiation()
     // when the client replies "IAC DO MSSP" to this driver's own
@@ -130,6 +147,15 @@ public:
         std::vector<std::pair<std::string, std::string>> out = std::move(incomingMsdp_);
         incomingMsdp_.clear();
         return out;
+    }
+
+    // Real "safe_apply(APPLY_MSDP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+    // (src/net/telnet.cc's own on_telnet_do_msdp()), same shape as
+    // takeGmcpEnableNegotiated() above - see its own comment.
+    bool takeMsdpEnableNegotiated() {
+        bool had = msdpEnableNegotiated_;
+        msdpEnableNegotiated_ = false;
+        return had;
     }
 
     // MUD eXtension Protocol (telnet option 91/0x5B), same "not specific
@@ -450,9 +476,11 @@ private:
     std::string wsPendingSend_;
     std::string encoding_ = "utf-8";
     bool gmcpEnabled_ = false;
+    bool gmcpEnableNegotiated_ = false;
     std::vector<std::string> incomingGmcp_;
     bool msspNegotiated_ = false;
     bool msdpEnabled_ = false;
+    bool msdpEnableNegotiated_ = false;
     std::vector<std::pair<std::string, std::string>> incomingMsdp_;
     bool mxpEnabled_ = false;
     bool mspEnabled_ = false;

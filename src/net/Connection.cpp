@@ -48,6 +48,28 @@ constexpr unsigned char kTelOptZmp = 93;
 constexpr unsigned char kTelQualIs = 0;
 constexpr unsigned char kTelQualSend = 1;
 
+// Real telnet_send() (src/thirdparty/libtelnet/libtelnet.c), used by
+// telnet_subnegotiation() for the payload portion of every real
+// subnegotiation send: doubles any literal IAC (0xFF) byte found before
+// it hits the wire, or a client parsing the subnegotiation would read
+// that lone 0xFF as the start of a new telnet command and truncate the
+// payload right there. Central helper for every sendX() method in this
+// file that writes subnegotiation payload bytes (sendGmcp(), sendMssp(),
+// sendMsdp(), sendMspOob(), sendZmp()): each of their own payloads can
+// contain arbitrary mudlib-authored content (a GMCP package name, an
+// MSSP variable value, an MSDP variable/value pair, an MSP trigger
+// string, a ZMP command/argument), not just the fixed driver-composed
+// strings early code in this file assumed were the only real case.
+// Moved to file scope (was previously local to sendMspOob()/sendZmp()
+// only) so every sendX() method below can use it regardless of
+// definition order.
+void appendIacEscaped(std::string& out, const std::string& data) {
+    for (unsigned char c : data) {
+        out += static_cast<char>(c);
+        if (c == kIac) out += static_cast<char>(kIac);
+    }
+}
+
 const char* kWsMagic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 std::string sha1Base64(const std::string& input) {
@@ -238,11 +260,20 @@ void Connection::send(const std::string& data) {
 }
 
 void Connection::sendGmcp(const std::string& package) {
-    unsigned char prefix[] = {kIac, kSb, kTelOptGmcp};
-    unsigned char suffix[] = {kIac, kSe};
-    send(std::string(reinterpret_cast<char*>(prefix), sizeof(prefix)) +
-         package +
-         std::string(reinterpret_cast<char*>(suffix), sizeof(suffix)));
+    // package is a mudlib-supplied string (the GMCP "Package.Name
+    // {json}" text), not a fixed driver-composed value, so it goes
+    // through appendIacEscaped() the same as every other sendX() below
+    // now does. Previously built via raw concatenation with no
+    // escaping at all; fixed alongside sendMssp()/sendMsdp() below,
+    // same STATUS.md row.
+    std::string out;
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSb);
+    out += static_cast<char>(kTelOptGmcp);
+    appendIacEscaped(out, package);
+    out += static_cast<char>(kIac);
+    out += static_cast<char>(kSe);
+    send(out);
 }
 
 namespace {
@@ -251,11 +282,17 @@ namespace {
 constexpr unsigned char kMsspVar = 1;
 constexpr unsigned char kMsspVal = 2;
 
+// name is always a fixed driver-composed literal (NAME/PLAYERS/UPTIME/
+// CODEBASE) so cannot contain 0xFF in practice, but value can be
+// mudlib/config-supplied (mudName is Config::mudName(), a driver
+// config value, not hardcoded) - both go through appendIacEscaped()
+// regardless, cheaper than reasoning per-call-site about which one
+// might ever carry arbitrary content.
 void appendMsspVar(std::string& out, const std::string& name, const std::string& value) {
     out += static_cast<char>(kMsspVar);
-    out += name;
+    appendIacEscaped(out, name);
     out += static_cast<char>(kMsspVal);
-    out += value;
+    appendIacEscaped(out, value);
 }
 } // namespace
 
@@ -287,39 +324,21 @@ constexpr unsigned char kMsdpVal = 2;
 } // namespace
 
 void Connection::sendMsdp(const std::string& varName, const std::string& value) {
+    // Both varName and value are mudlib-supplied (send_msdp_variable's
+    // own two string arguments), so both go through appendIacEscaped()
+    // now, same as sendGmcp()/sendMssp() above.
     std::string out;
     out += static_cast<char>(kIac);
     out += static_cast<char>(kSb);
     out += static_cast<char>(kTelOptMsdp);
     out += static_cast<char>(kMsdpVar);
-    out += varName;
+    appendIacEscaped(out, varName);
     out += static_cast<char>(kMsdpVal);
-    out += value;
+    appendIacEscaped(out, value);
     out += static_cast<char>(kIac);
     out += static_cast<char>(kSe);
     send(out);
 }
-
-namespace {
-// Real telnet_send() (src/thirdparty/libtelnet/libtelnet.c), used by
-// telnet_subnegotiation() for the payload portion of every real
-// subnegotiation send: doubles any literal IAC (0xFF) byte found before
-// it hits the wire, or a client parsing the subnegotiation would read
-// that lone 0xFF as the start of a new telnet command and truncate the
-// payload right there. Shared here for both sendMspOob() and sendZmp()
-// below, the two sendX() methods in this file whose payload is fully
-// arbitrary mudlib-authored content (unlike sendMssp()'s/sendMsdp()'s
-// own driver-composed ASCII payloads elsewhere in this file, which
-// cannot contain 0xFF in practice - see this row's own STATUS.md entry
-// for why those two, plus sendGmcp(), are flagged as a known gap rather
-// than fixed here too).
-void appendIacEscaped(std::string& out, const std::string& data) {
-    for (unsigned char c : data) {
-        out += static_cast<char>(c);
-        if (c == kIac) out += static_cast<char>(kIac);
-    }
-}
-} // namespace
 
 void Connection::sendMspOob(const std::string& payload) {
     // Real telnet_send_msp_oob() (src/net/msp.cc): "if (ip->iflags &
@@ -679,6 +698,7 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
             unsigned char resp[] = {kIac, kDo, kTelOptGmcp};
             send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
             gmcpEnabled_ = true;
+            gmcpEnableNegotiated_ = true;
             return;
         }
         // A client volunteering "IAC WILL MSDP" unprompted (this driver
@@ -689,6 +709,7 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
             unsigned char resp[] = {kIac, kDo, kTelOptMsdp};
             send(std::string(reinterpret_cast<char*>(resp), sizeof(resp)));
             msdpEnabled_ = true;
+            msdpEnableNegotiated_ = true;
             return;
         }
         // A client volunteering "IAC WILL MXP" unprompted, same shape
@@ -727,6 +748,7 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
         if (option == kTelOptEcho) return;
         if (option == kTelOptGmcp) {
             gmcpEnabled_ = true;
+            gmcpEnableNegotiated_ = true;
             return;
         }
         if (option == kTelOptMssp) {
@@ -741,6 +763,7 @@ void Connection::handleNegotiation(TelnetState kind, unsigned char option) {
         // from here on, same as the GMCP Do-branch just above.
         if (option == kTelOptMsdp) {
             msdpEnabled_ = true;
+            msdpEnableNegotiated_ = true;
             return;
         }
         // The client's "IAC DO MXP" reply to this driver's own

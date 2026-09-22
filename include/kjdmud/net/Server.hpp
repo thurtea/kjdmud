@@ -95,6 +95,23 @@ public:
     // itself, which all skip firing when !obj).
     static void fireMspEnableIfNegotiated(VM& vm, Connection& conn);
 
+    // Real "safe_apply(APPLY_GMCP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+    // (src/net/telnet.cc's own on_telnet_do_gmcp(), confirmed against
+    // current FluffOS source - found missing from this driver's own
+    // already-shipped GMCP handling by re-verifying ZMP against real
+    // source rather than trusting an earlier session's own summary,
+    // which had assumed no real driver even implements GMCP natively;
+    // it does). Same shape and same reason as fireMspEnableIfNegotiated()
+    // above: pulled out static and public for direct test coverage, a
+    // no-op if the one-shot flag was not just set or the connection has
+    // no bound object yet.
+    static void fireGmcpEnableIfNegotiated(VM& vm, Connection& conn);
+
+    // Real "safe_apply(APPLY_MSDP_ENABLE, ip->ob, 0, ORIGIN_DRIVER)"
+    // (src/net/telnet.cc's own on_telnet_do_msdp()), same shape as
+    // fireGmcpEnableIfNegotiated() above - see its own comment.
+    static void fireMsdpEnableIfNegotiated(VM& vm, Connection& conn);
+
     // Real "safe_apply(APPLY_ZMP, ip->ob, 2, ORIGIN_DRIVER)" (src/net/
     // telnet.cc's own on_telnet_do_zmp(), confirmed against current
     // FluffOS source; see Connection.hpp's own takeIncomingZmp()

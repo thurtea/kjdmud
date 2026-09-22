@@ -97,15 +97,17 @@ scope too; the next protocol-shaped gap, if any, would be outside that
 file's own original scope the same way MSP/ZMP were.
 
 A second, separate finding surfaced re-verifying ZMP rather than trusted
-from the prior session's own summary: real `GMCP`/`MSDP` each also have
+from the prior session's own summary - real `GMCP`/`MSDP` each also have
 their own real `GMCP_ENABLE`/`MSDP_ENABLE` applies
-(`src/vm/internal/applies`) that this repo's own already-shipped
-`gmcp()`/`msdp()` handling never fires - a real, verified gap parallel
-to (but distinct from) the `sendMssp()`/`sendMsdp()`/`sendGmcp()`
-IAC-escaping gap flagged under MSP's own `docs/dev/STATUS.md` entry.
-Neither gap is fixed as of this note; both are candidates for a future
-row, not urgent enough to justify reopening already-shipped, working
-code without being asked.
+(`src/vm/internal/applies`) - is now fixed too
+(`Server::fireGmcpEnableIfNegotiated()`/`fireMsdpEnableIfNegotiated()`,
+same shape as MSP's own `msp_enable()`; `docs/dev/STATUS.md`
+2026-09-22). The `sendMssp()`/`sendMsdp()`/`sendGmcp()` IAC-escaping gap
+flagged alongside it is fixed too (`docs/dev/STATUS.md` 2026-09-22,
+earlier entry). Re-checking `core.spec` for that same row also turned
+up a real naming defect in this driver's own already-shipped MSDP send
+efun (`send_msdp` instead of the real `send_msdp_variable`), corrected
+in the same pass.
 
 ## Status record
 

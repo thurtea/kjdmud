@@ -114,10 +114,20 @@ void registerNetEfuns() {
         return Value(static_cast<int64_t>(conn && conn->msdpEnabled() ? 1 : 0));
     });
 
-    t.registerEfun("send_msdp", [](VM& vm, std::vector<Value>& args) -> Value {
+    // Real name confirmed against current FluffOS src/packages/core/
+    // core.spec: "void send_msdp_variable(string, string | float | int
+    // OR_BUFFER);" - this driver's own earlier "send_msdp" name (fixed
+    // this row, GMCP_ENABLE/MSDP_ENABLE's own verification pass) was
+    // wrong, unlike has_gmcp/send_gmcp/has_msdp, all three of which
+    // already matched the real name. Real signature accepts string,
+    // float, int, or buffer for the value; this driver's own MSDP v1
+    // scope stays string-only (see Connection.hpp's own sendMsdp()
+    // comment on that scope decision), so the string-only union member
+    // is what is implemented, not the full real union type.
+    t.registerEfun("send_msdp_variable", [](VM& vm, std::vector<Value>& args) -> Value {
         if (args.size() < 2 || !std::holds_alternative<std::string>(args[0].data) ||
             !std::holds_alternative<std::string>(args[1].data)) {
-            throw LpcRuntimeError("send_msdp: expected two string arguments (var, value)");
+            throw LpcRuntimeError("send_msdp_variable: expected two string arguments (var, value)");
         }
         auto ob = vm.commandGiver();
         if (!ob) ob = vm.currentObject();
@@ -131,9 +141,9 @@ void registerNetEfuns() {
     // Real efun names/signatures, confirmed against current FluffOS
     // src/packages/core/core.spec: "int has_msp(object default:
     // F__THIS_OBJECT);" and "void telnet_msp_oob(string);" - unlike
-    // has_gmcp/send_gmcp/has_msdp/send_msdp/has_mxp/mxp_*, no naming
-    // deviation here: this row's own verification pass found the real
-    // names, so they are used verbatim rather than the has_X/send_X
+    // has_gmcp/send_gmcp/has_msdp/send_msdp_variable/has_mxp/mxp_*, no
+    // naming deviation here: this row's own verification pass found the
+    // real names, so they are used verbatim rather than the has_X/send_X
     // convention this driver invented for the earlier rows when no
     // verified real name was available.
     t.registerEfun("has_msp", [](VM& vm, std::vector<Value>& args) -> Value {

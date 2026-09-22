@@ -46,6 +46,11 @@ must continue unchanged.
   status, so they are **not** a live status signal. Only
   `docs/dev/ROADMAP.md`'s checkboxes and `docs/dev/STATUS.md`'s dated
   entries are.
+- Adding a new telnet protocol apply/dispatch method to `Server`? Read
+  `docs/dev/TESTING_SEAMS.md` first and follow its naming convention
+  (`fire<Protocol>EnableIfNegotiated()` / `dispatchIncoming<Protocol>()`)
+  so it stays directly testable without a live accept loop, the same way
+  every existing one already is.
 - `temp/reference/fluffos-2.9-ds2.08/` is the vendored real FluffOS 2.9
   source used for every citation throughout this repo (`efun_defs.c`,
   `func_spec.c`, `object.c`, `simulate.c`, etc.). It is intentionally
